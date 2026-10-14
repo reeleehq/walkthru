@@ -34,7 +34,7 @@ reelee = ["reelee", "burns", "mixing"]
 # The MixingSynthesizer (walkthru.adapters.synth) — ElevenLabs TTS + audio assembly via `mixing`.
 # An optional adapter behind the ports firewall; the synth itself is duck-typed and unit-tested
 # without it (injected seams). See DECISIONS.md §D12.
-synth = ["mixing"]
+synth = ["mixing[media]"]
 
 [tool.ruff]
 line-length = 88
