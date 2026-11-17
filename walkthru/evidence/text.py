@@ -33,6 +33,7 @@ __all__ = [
     "merge_line_boxes",
     "find_word_run",
     "fuzzy_word_run",
+    "tokens_agree",
     "similarity",
 ]
 
@@ -86,16 +87,18 @@ def normalize_text(text: str) -> str:
 
 
 def skeleton(text: str) -> str:
-    """:func:`normalize_text` with all whitespace and hyphens removed.
+    """:func:`normalize_text` with hyphens and dashes removed (spaces kept).
 
-    PDFs break words across lines with a hyphen (``"recog-\\nnition"``) and a text layer may or may
-    not keep it; comparing skeletons makes ``"recognition"``, ``"recog- nition"`` and
-    ``"self-driven"``/``"selfdriven"`` equal, while every letter still has to match.
+    Compound words are written ``"self-driven"`` or ``"selfdriven"``, and a dash between words may
+    or may not be extracted; skeletons make those equal. Word boundaries still count:
+    ``"the rapist"`` and ``"therapist"`` differ.
 
-    >>> skeleton("recog-\\nnition") == skeleton("recognition")
+    >>> skeleton("self-driven") == skeleton("selfdriven")
     True
+    >>> skeleton("the rapist") == skeleton("therapist")
+    False
     """
-    return normalize_text(text).replace(" ", "").replace("-", "")
+    return _WS.sub(" ", normalize_text(text).replace("-", "")).strip()
 
 
 def merge_line_boxes(
@@ -130,36 +133,60 @@ def merge_line_boxes(
 
 
 def find_word_run(
-    words: Sequence[str], quote: str, *, nth: int = 0
+    words: Sequence[str],
+    quote: str,
+    *,
+    nth: int = 0,
+    line_ends: Optional[Sequence[bool]] = None,
 ) -> Optional[tuple[int, int]]:
-    """Index range ``(first, last)`` of the words that spell ``quote`` (its ``nth`` occurrence).
+    """Index range ``(first, last)`` of the whole words that spell ``quote`` (``nth`` occurrence).
 
-    Matching is on :func:`skeleton` s, so line-break hyphenation and spacing never prevent a
-    match, while every letter must. Returns ``None`` when there are fewer than ``nth + 1``
-    occurrences.
+    Words are compared as :func:`skeleton` s joined by single spaces, except that a word ending
+    in a hyphen at the end of a line (``line_ends[i]`` true) joins the next word with no space —
+    ``"recog-" / "nition"`` reads ``"recognition"``. The match must begin at the start of a word
+    and end at the end of one, so ``"rate rose"`` never matches inside ``"accurate rose"``.
+    Returns ``None`` when there are fewer than ``nth + 1`` occurrences.
 
-    >>> find_word_run(["The", "recog-", "nition", "rate", "rose"], "recognition rate")
+    >>> find_word_run(["The", "recog-", "nition", "rate", "rose"], "recognition rate",
+    ...               line_ends=[False, True, False, False, False])
     (1, 3)
     >>> find_word_run(["a", "b", "a", "b"], "a b", nth=1)
     (2, 3)
-    >>> find_word_run(["a", "b"], "c") is None
+    >>> find_word_run(["the", "therapist", "said"], "the rapist said") is None
+    True
+    >>> find_word_run(["accurate", "rose"], "rate rose") is None
     True
     """
     q = skeleton(quote)
     if not q:
         return None
-    flat, owner = [], []
+    breaks = list(line_ends) if line_ends is not None else [False] * len(words)
+    text, owner = "", []
     for i, w in enumerate(words):
         s = skeleton(w)
-        flat.append(s)
+        if not s:
+            continue
+        prev = normalize_text(words[i - 1]) if i else ""
+        joined = bool(text) and breaks[i - 1] and prev.endswith("-")
+        if text and not joined:
+            text += " "
+            owner.append(-1)
+        text += s
         owner.extend([i] * len(s))
-    text = "".join(flat)
-    at = -1
-    for _ in range(nth + 1):
+
+    def inside_word(k: int) -> bool:  # is k..k+1 the middle of a word?
+        return 0 <= k < len(text) - 1 and text[k].isalnum() and text[k + 1].isalnum()
+
+    at, seen = -1, -1
+    while True:
         at = text.find(q, at + 1)
         if at < 0:
             return None
-    return owner[at], owner[at + len(q) - 1]
+        end = at + len(q) - 1
+        if not inside_word(at - 1) and not inside_word(end):
+            seen += 1
+            if seen == nth:
+                return owner[at], owner[at + len(q) - 1]
 
 
 def similarity(a: str, b: str) -> float:
@@ -182,7 +209,8 @@ def fuzzy_word_run(
 
     For OCR output, where a letter or a word break may be misread: every window whose length is
     within ``slack`` words of the quote's is scored by :func:`similarity` on normalised text, and
-    the best one wins. The caller decides what score is good enough.
+    the best one wins. A high score is necessary, not sufficient: also check
+    :func:`tokens_agree`, since one dropped "not" barely moves a whole-string ratio.
 
     >>> fuzzy_word_run(["noise", "the", "qu1ck", "brown", "fox", "end"], "the quick brown fox")[:2]
     (1, 4)
@@ -199,3 +227,41 @@ def fuzzy_word_run(
             if best is None or score > best[2]:
                 best = (i, i + length - 1, score)
     return best
+
+
+def _tokens(text: str) -> list[str]:
+    return [t for t in (_PUNCT.sub("", w) for w in normalize_text(text).split()) if t]
+
+
+_PUNCT = re.compile(r"[^\w]+")
+
+
+def tokens_agree(read: str, quote: str, *, min_token_ratio: float = 70.0) -> bool:
+    """True when OCR-read text says what ``quote`` says, word for word.
+
+    Words are aligned; every quote word must be present (a dropped or added word fails, however
+    short — "did not reduce" is not "did reduce"), a misread word must still be at least
+    ``min_token_ratio`` similar, and a quote word holding a digit must be read exactly ("12" is
+    not "21"). A word split or merged by OCR (``"recog nition"``) is compared joined.
+
+    >>> tokens_agree("The qu1ck brown fox", "the quick brown fox")
+    True
+    >>> tokens_agree("the drug did reduce it", "the drug did not reduce it")
+    False
+    >>> tokens_agree("rose by 21 %", "rose by 12 %")
+    False
+    """
+    a, b = _tokens(read), _tokens(quote)
+    if not b:
+        return False
+    for op, i1, i2, j1, j2 in SequenceMatcher(None, a, b, autojunk=False).get_opcodes():
+        if op == "equal":
+            continue
+        if op != "replace":
+            return False
+        got, want = "".join(a[i1:i2]), "".join(b[j1:j2])
+        if any(c.isdigit() for c in want) and got != want:
+            return False
+        if similarity(got, want) < min_token_ratio:
+            return False
+    return True

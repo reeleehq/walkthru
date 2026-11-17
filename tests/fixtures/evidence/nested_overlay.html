@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Overlay inside the quote's own element</title>
+<style>
+  body { font: 20px/1.5 Georgia, serif; color: #222; background: #fff; max-width: 760px; margin: 0 auto; padding: 24px; }
+  .spacer { height: 1400px; }
+  /* A paywall curtain that is a child of the element holding the quote. Small enough not to be
+     auto-hidden (hide_overlays=False in the test anyway), opaque, over the middle of the screen. */
+  .curtain { position: fixed; left: 0; right: 0; top: 30%; height: 40%; background: #333; color: #fff; z-index: 5; }
+</style>
+</head>
+<body>
+<div class="spacer"></div>
+<div>The premium sentence hides behind a curtain of its own.<div class="curtain">SUBSCRIBE TO READ</div></div>
+<div class="spacer"></div>
+</body>
+</html>

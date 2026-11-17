@@ -59,8 +59,8 @@ class Capture:
         source: The source as given (URL or path).
         quote: The quote as given.
         reason: Why the capture is not verified — ``"no-quote"``, ``"not-in-text"``,
-            ``"mismatch"``, ``"off-screen"``, ``"occluded"``, ``"unstable"``, ``"ocr-mismatch"``
-            or ``"scanned-needs-ocr"``. ``None`` when found.
+            ``"mismatch"``, ``"invisible"``, ``"off-screen"``, ``"occluded"``, ``"unstable"``,
+            ``"ocr-mismatch"``, ``"ocr-failed"`` or ``"scanned-needs-ocr"``. ``None`` when found.
         page: PDF page index (0-based), ``None`` for web pages.
         nth: Which occurrence of the quote was used (0-based), when one was located.
         details: Diagnostics (occluded box count, OCR score, …); free-form.

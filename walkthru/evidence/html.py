@@ -10,13 +10,15 @@ The DOM already knows where its text is, so no OCR is involved. The procedure, i
    ``Range`` over it; centre it in whichever element scrolls (falling back to the window).
 3. **Verify** — the part that makes a highlight safe to draw:
 
-   * ``range.toString()``, normalised, must equal the quote, normalised;
+   * ``range.toString()``, normalised, must spell the quote (spacing aside);
+   * no text node in the range may hold characters that draw nothing (zero size, transparent);
    * every box of the passage (one per line fragment of each text node in the range) must lie
      inside the viewport;
-   * ``document.elementFromPoint`` at each box's centre must return the element that holds that
-     text (or one inside it) — not a cookie banner or sticky bar drawn over it, and not an
-     ancestor, which is what a point over text clipped away by ``overflow: hidden`` returns;
-   * the boxes must not move between the check and the screenshot.
+   * a caret hit test (``caretPositionFromPoint``) at six points in each box must land in that
+     very text node, inside the passage: not in a cookie banner or sticky bar drawn over it (even
+     one nested in the quote's own element), and not in an ancestor, which is what a point over
+     text clipped away by ``overflow: hidden`` returns;
+   * the passage must still verify, with the same boxes, after the screenshot.
 
    Occurrences are tried in order until one passes (or only ``nth``, when given).
 
@@ -39,7 +41,11 @@ from walkthru.evidence.text import DROP, FOLDS, merge_line_boxes, normalize_text
 __all__ = [
     "DEFAULT_DISMISS_LABELS",
     "DEFAULT_USER_AGENT",
+    "PASSAGE_LOCATE_JS",
+    "PASSAGE_VERIFY_JS",
     "capture_html",
+    "judge_passage",
+    "locate_args",
     "open_capture_page",
 ]
 
@@ -70,9 +76,12 @@ DEFAULT_USER_AGENT = (
     "(KHTML, like Gecko) Chrome/130.0 Safari/537.36"
 )
 
-# Locate the nth occurrence of the quote among visible text nodes; build and centre a Range.
-_FIND_JS = r"""
-({quote, nth, folds, drop}) => {
+#: Browser-side locator (argument: :func:`locate_args`). Finds the ``nth`` occurrence of the quote
+#: among visible text nodes, stores a ``Range`` over it under ``key`` and (if ``scroll``) centres
+#: it. Block boundaries and ``<br>`` count as spaces, so words in adjacent paragraphs never fuse.
+#: Engine-agnostic: evaluate it on any page you drive, sync or async.
+PASSAGE_LOCATE_JS = r"""
+({quote, nth, folds, drop, key, scroll}) => {
   const dropSet = new Set(drop);
   const fold = ch => {
     let o = '';
@@ -92,18 +101,43 @@ _FIND_JS = r"""
       i += len;
     }
   };
+  const blocks = new Map();
+  const blockOf = el => {
+    if (blocks.has(el)) return blocks.get(el);
+    let e = el;
+    while (e && e !== document.body) {
+      const d = getComputedStyle(e).display;
+      if (!d.startsWith('inline') && d !== 'contents') break;
+      e = e.parentElement;
+    }
+    blocks.set(el, e || document.body);
+    return e || document.body;
+  };
   const SKIP = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE', 'TEXTAREA']);
-  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
+  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT, {
     acceptNode: n => {
+      if (n.nodeType === Node.ELEMENT_NODE) {
+        if (SKIP.has(n.tagName)) return NodeFilter.FILTER_REJECT;
+        return n.tagName === 'BR' ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP;
+      }
       const p = n.parentElement;
-      if (!p || SKIP.has(p.tagName)) return NodeFilter.FILTER_REJECT;
+      if (!p) return NodeFilter.FILTER_REJECT;
       if (p.checkVisibility && !p.checkVisibility({checkOpacity: true, checkVisibilityCSS: true}))
         return NodeFilter.FILTER_REJECT;
       return NodeFilter.FILTER_ACCEPT;
     }});
   const page = {flat: '', map: [], lastSpace: true};
-  let node;
-  while ((node = walker.nextNode())) flatten(page, node.nodeValue, node);
+  const gap = n => {
+    if (!page.lastSpace) { page.flat += ' '; page.map.push([n, 0, 0]); page.lastSpace = true; }
+  };
+  let node, lastBlock = null;
+  while ((node = walker.nextNode())) {
+    if (node.nodeType === Node.ELEMENT_NODE) { gap(node); continue; }  // <br>
+    const b = blockOf(node.parentElement);
+    if (lastBlock && b !== lastBlock) gap(node);
+    lastBlock = b;
+    flatten(page, node.nodeValue, node);
+  }
   const qs = {flat: '', map: [], lastSpace: true};
   flatten(qs, quote, null);
   const q = qs.flat.trim();
@@ -116,26 +150,41 @@ _FIND_JS = r"""
   const [sn, so] = page.map[at], [en, eo, elen] = page.map[at + q.length - 1];
   const r = document.createRange();
   r.setStart(sn, so); r.setEnd(en, eo + elen);
-  window.__walkthruRange = r;
-  // Centre the quote itself, in whichever element scrolls.
-  sn.parentElement.scrollIntoView({block: 'center', behavior: 'instant'});
-  const off = () => { const b = r.getBoundingClientRect(); return b.top + b.height / 2 - innerHeight / 2; };
-  let sc = sn.parentElement;
-  while (sc && !(/(auto|scroll|overlay)/.test(getComputedStyle(sc).overflowY) && sc.scrollHeight > sc.clientHeight))
-    sc = sc.parentElement;
-  (sc || window).scrollBy({top: off(), behavior: 'instant'});
-  // Wrong scroller guessed: fall back to the window.
-  if (Math.abs(off()) > innerHeight * 0.25) window.scrollBy({top: off(), behavior: 'instant'});
+  (window.__walkthruRanges = window.__walkthruRanges || {})[key] = r;
+  if (scroll) {  // centre the quote itself, in whichever element scrolls
+    sn.parentElement.scrollIntoView({block: 'center', behavior: 'instant'});
+    const off = () => { const b = r.getBoundingClientRect(); return b.top + b.height / 2 - innerHeight / 2; };
+    let sc = sn.parentElement;
+    while (sc && !(/(auto|scroll|overlay)/.test(getComputedStyle(sc).overflowY) && sc.scrollHeight > sc.clientHeight))
+      sc = sc.parentElement;
+    (sc || window).scrollBy({top: off(), behavior: 'instant'});
+    // Wrong scroller guessed: fall back to the window.
+    if (Math.abs(off()) > innerHeight * 0.25) window.scrollBy({top: off(), behavior: 'instant'});
+  }
   return {found: true};
 }
 """
 
-# Read the located range's text boxes (per text node, so each box knows the element holding its
-# text), and hit-test each box centre against that element.
-_VERIFY_JS = r"""
-() => {
-  const r = window.__walkthruRange;
+#: Browser-side check of the range stored under ``key`` (argument: ``{"key": key}``). Returns the
+#: range's text, one box per line fragment of each text node, whether each box is on screen and
+#: whether a caret hit test at six points inside it lands in that very text node (not a banner
+#: over it, not an ancestor under clipped text), and how many text nodes hold visible characters
+#: yet draw nothing (zero size, transparent). Judge the result with :func:`judge_passage`.
+PASSAGE_VERIFY_JS = r"""
+({key}) => {
+  const r = (window.__walkthruRanges || {})[key];
   if (!r) return null;
+  const caretAt = (x, y) => {
+    if (document.caretPositionFromPoint) {
+      const c = document.caretPositionFromPoint(x, y);
+      return c ? [c.offsetNode, c.offset] : null;
+    }
+    if (document.caretRangeFromPoint) {
+      const c = document.caretRangeFromPoint(x, y);
+      return c ? [c.startContainer, c.startOffset] : null;
+    }
+    return null;
+  };
   const root = r.commonAncestorContainer;
   const texts = [];
   if (root.nodeType === Node.TEXT_NODE) texts.push(root);
@@ -145,23 +194,32 @@ _VERIFY_JS = r"""
     while ((n = w.nextNode())) if (r.intersectsNode(n)) texts.push(n);
   }
   const boxes = [];
+  let invisible = 0;
   for (const n of texts) {
+    const s0 = n === r.startContainer ? r.startOffset : 0;
+    const s1 = n === r.endContainer ? r.endOffset : n.nodeValue.length;
     const sub = document.createRange();
-    sub.setStart(n, n === r.startContainer ? r.startOffset : 0);
-    sub.setEnd(n, n === r.endContainer ? r.endOffset : n.nodeValue.length);
-    const holder = n.parentElement;
+    sub.setStart(n, s0); sub.setEnd(n, s1);
+    const cs = n.parentElement ? getComputedStyle(n.parentElement) : null;
+    let drawn = 0;
     for (const b of sub.getClientRects()) {
       if (b.width <= 1 || b.height <= 1) continue;
+      drawn++;
       const onscreen = b.left >= -0.5 && b.top >= -0.5 && b.right <= innerWidth + 0.5 && b.bottom <= innerHeight + 0.5;
-      let hit = false;
+      let hit = onscreen;
       if (onscreen) {
-        const el = document.elementFromPoint((b.left + b.right) / 2, (b.top + b.bottom) / 2);
-        hit = !!el && !!holder && (el === holder || holder.contains(el));
+        for (const fx of [0.15, 0.5, 0.85]) for (const fy of [0.3, 0.7]) {
+          const c = caretAt(b.left + fx * b.width, b.top + fy * b.height);
+          if (!c || c[0] !== n || c[1] < s0 || c[1] > s1) hit = false;
+        }
       }
       boxes.push({box: [b.left, b.top, b.right, b.bottom], onscreen, hit});
     }
+    const hasInk = /\S/.test(n.nodeValue.slice(s0, s1));
+    const clear = cs && (cs.color === 'transparent' || /rgba\([^)]*,\s*0(\.0+)?\)$/.test(cs.color));
+    if (hasInk && (drawn === 0 || clear)) invisible++;
   }
-  return {matched: r.toString(), boxes, dpr: devicePixelRatio};
+  return {matched: r.toString(), boxes, invisible, dpr: devicePixelRatio};
 }
 """
 
@@ -335,21 +393,22 @@ def capture_html(
     if quote and normalize_text(quote):
         tries = [nth] if nth is not None else range(max_occurrences)
         result = {"reason": "not-in-text"}
-        args = {"quote": quote, "folds": FOLDS, "drop": sorted(DROP)}
         for k in tries:
-            located = page.evaluate(_FIND_JS, {**args, "nth": k})
+            located = page.evaluate(PASSAGE_LOCATE_JS, locate_args(quote, nth=k))
             if not located.get("found"):
                 break
             if scroll_settle_ms:
                 page.wait_for_timeout(scroll_settle_ms)
-            result = _verify(page.evaluate(_VERIFY_JS), quote, nth=k)
+            result = judge_passage(page.evaluate(PASSAGE_VERIFY_JS, _KEY), quote, nth=k)
             if result.get("found"):
                 break
 
     page.screenshot(path=str(png))
-    if result.get("found"):  # the screenshot must show what was verified
-        after = page.evaluate(_VERIFY_JS)
-        if not _same_boxes(result["boxes"], after["boxes"]):
+    if result.get("found"):  # the screenshot must show what was verified, unchanged
+        after = judge_passage(
+            page.evaluate(PASSAGE_VERIFY_JS, _KEY), quote, nth=result["nth"]
+        )
+        if not (after.get("found") and _same_boxes(result["boxes"], after["boxes"])):
             result = {**result, "found": False, "reason": "unstable"}
 
     found = bool(result.get("found"))
@@ -384,8 +443,36 @@ def capture_html(
     return capture
 
 
-def _verify(state: Optional[dict], quote: str, *, nth: int) -> dict[str, Any]:
-    """Decide whether the located range is the quote, fully on screen, and not covered."""
+def locate_args(
+    quote: str, *, nth: int = 0, key: str = "passage", scroll: bool = True
+) -> dict[str, Any]:
+    """The argument object for :data:`PASSAGE_LOCATE_JS` (fold tables included).
+
+    ``key`` names the stored range, so several passages can be located on one page; pass the
+    same ``{"key": key}`` to :data:`PASSAGE_VERIFY_JS`. ``scroll=False`` locates without moving
+    the page (for a demo whose scrolling is itself a step).
+    """
+    return {
+        "quote": quote,
+        "nth": nth,
+        "folds": FOLDS,
+        "drop": sorted(DROP),
+        "key": key,
+        "scroll": scroll,
+    }
+
+
+_KEY = {"key": "passage"}
+
+
+def judge_passage(state: Optional[dict], quote: str, *, nth: int = 0) -> dict[str, Any]:
+    """Decide from a :data:`PASSAGE_VERIFY_JS` result whether the passage is verified.
+
+    Returns ``{"found": bool, "reason": ..., "matched", "boxes", "dpr", "nth"}``. In order: the
+    range's text must spell the quote (spacing aside: block boundaries are spaces to the locator
+    but not to ``Range.toString()``); no text in the range may be invisible; every box must be on
+    screen; every box must pass the caret hit test.
+    """
     if not state:
         return {"found": False, "reason": "not-in-text"}
     boxes = state["boxes"]
@@ -395,8 +482,14 @@ def _verify(state: Optional[dict], quote: str, *, nth: int) -> dict[str, Any]:
         "dpr": state["dpr"],
         "nth": nth,
     }
-    if normalize_text(state["matched"]) != normalize_text(quote) or not boxes:
+
+    def letters(text: str) -> str:
+        return normalize_text(text).replace(" ", "")
+
+    if letters(state["matched"]) != letters(quote) or not boxes:
         return {**base, "found": False, "reason": "mismatch"}
+    if state.get("invisible"):
+        return {**base, "found": False, "reason": "invisible"}
     if not all(b["onscreen"] for b in boxes):
         return {**base, "found": False, "reason": "off-screen"}
     if not all(b["hit"] for b in boxes):

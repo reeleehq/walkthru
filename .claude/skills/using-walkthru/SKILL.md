@@ -307,12 +307,14 @@ The rules:
   description, or your report). `render_highlight_clip` does exactly that for an unverified
   capture: a gentle push-in, no marker. `cap.reason` says why: `not-in-text` (quote not on the
   page as visible text — check the wording), `occluded` (a banner or dialog covers it),
-  `off-screen` (the quote is taller than the viewport — quote less), `mismatch`, `ocr-mismatch`,
-  `scanned-needs-ocr` (install the `ocr` extra).
-- `cap.verified_by` says how: `dom` (range text equals the quote, every box on screen, and the
-  element at each box centre is the one holding that text), `pdf-text` (born-digital text layer;
-  hyphenated line breaks are fine), `ocr` (scanned page re-read from pixels; its own text layer's
-  boxes are never trusted).
+  `off-screen` (the quote is taller than the viewport — quote less), `invisible` (part of the
+  quote is in the DOM but not drawn: the page does not say it), `mismatch`, `ocr-mismatch`,
+  `ocr-failed`, `scanned-needs-ocr` (install the `ocr` extra).
+- `cap.verified_by` says how: `dom` (range text spells the quote, nothing in it drawn
+  invisibly, every box on screen, a caret hit test at six points per box lands in the quote's
+  own text), `pdf-text` (whole words of a born-digital text layer; hyphenated line breaks are
+  fine), `ocr` (scanned page re-read from pixels and matched word for word; its own text
+  layer's boxes are never trusted).
 - Quote the source verbatim; typography (curly quotes, dashes, ligatures, case, whitespace) is
   folded, wording is not. Pass `nth=` to pin an occurrence; by default each is tried in turn.
 - Captures write a JSON sidecar beside the PNG; `render_highlight_clip("shots/s1.json", ...)` works

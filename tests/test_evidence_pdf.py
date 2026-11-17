@@ -100,6 +100,13 @@ def test_nth_counts_occurrences_through_the_document(tmp_path):
     assert not capture_passage(pdf, "same phrase", out=tmp_path / "c", nth=2).found
 
 
+def _layer_boxes(pdf, tmp_path):
+    """Where the scan's (offset) text layer puts QUOTE, in image pixels."""
+    probe = capture_passage(pdf, QUOTE, out=tmp_path / "probe", ocr=lambda png: [])
+    assert probe.reason == "ocr-mismatch"
+    return probe.details["text_layer_rects"]
+
+
 def test_scanned_page_never_uses_the_text_layer_boxes(tmp_path):
     pdf = _write_scanned(tmp_path / "scan.pdf")
     assert page_image_coverage(pymupdf.open(str(pdf))[0]) > 0.9
@@ -107,22 +114,105 @@ def test_scanned_page_never_uses_the_text_layer_boxes(tmp_path):
     unverified = capture_passage(pdf, QUOTE, out=tmp_path / "a", ocr=None)
     assert not unverified.found and unverified.reason == "scanned-needs-ocr"
 
+    (l0, l1) = _layer_boxes(pdf, tmp_path)  # two lines: "recog-" / "nition rate rose sharply"
+    up = 90  # the glyphs sit 30 pt (90 px at zoom 3) above the layer
     seen = []
 
     def fake_ocr(png):
         seen.append(png)
         return [
-            ("noise", (10, 10, 40, 30)),
-            ("recognition", (100, 300, 260, 330)),
-            ("rate", (270, 300, 330, 330)),
-            ("rose", (100, 360, 160, 390)),
-            ("sharply", (170, 360, 280, 390)),
+            ("recognition", (0, 0, 60, 20)),  # a decoy far from the layer: ignored
+            ("rate", (70, 0, 99, 20)),
+            ("rose", (100, 0, 140, 20)),
+            ("sharply", (150, 0, 200, 20)),
+            ("recognition", (l1[0], l1[1] - up, l1[0] + 150, l1[3] - up)),
+            ("rate", (l1[0] + 160, l1[1] - up, l1[0] + 210, l1[3] - up)),
+            ("rose", (l1[0] + 220, l1[1] - up, l1[0] + 270, l1[3] - up)),
+            ("sharply", (l1[0] + 280, l1[1] - up, l1[0] + 360, l1[3] - up)),
         ]
 
     cap = capture_passage(pdf, QUOTE, out=tmp_path / "b", ocr=fake_ocr)
     assert seen == [cap.png], "OCR reads the rendered window, whose pixels the boxes refer to"
     assert cap.found and cap.verified_by == "ocr"
-    assert cap.rects == ((100, 300, 330, 330), (100, 360, 280, 390))
+    assert cap.rects == ((l1[0], l1[1] - up, l1[0] + 360, l1[3] - up),)
+
+
+def test_scanned_page_ocr_that_drops_a_word_is_rejected(tmp_path):
+    pdf = _write_scanned(tmp_path / "scan.pdf")
+    l1 = _layer_boxes(pdf, tmp_path)[1]
+    near = (l1[0], l1[1] - 90, l1[2], l1[3] - 90)
+    quote = "recognition rate rose sharply once"
+    words = [("recognition", near), ("rate", near), ("sharply", near), ("once", near)]
+    cap = capture_passage(pdf, quote, out=tmp_path / "shot", ocr=lambda png: words)
+    assert not cap.found and cap.reason == "ocr-mismatch", "a missing word is not a misread"
+
+
+def test_a_scan_stored_as_strips_is_still_a_scan(tmp_path):
+    src = pymupdf.open(str(_write_born_digital(tmp_path / "src.pdf", pages=1)))
+    png = src[0].get_pixmap(matrix=pymupdf.Matrix(2, 2)).tobytes("png")
+    doc = pymupdf.open()
+    page = doc.new_page(width=612, height=792)
+    for k in range(4):  # four horizontal strips, each a quarter of the page
+        band = pymupdf.Rect(0, k * 198, 612, (k + 1) * 198)
+        page.insert_image(band, stream=png, keep_proportion=False)
+    for text, y in zip(LINES, BASELINES):
+        page.insert_text((72, y + 30), text, fontsize=16, render_mode=3)
+    pdf = tmp_path / "strips.pdf"
+    doc.save(str(pdf))
+    assert page_image_coverage(pymupdf.open(str(pdf))[0]) > 0.99
+    cap = capture_passage(pdf, QUOTE, out=tmp_path / "shot", ocr=None)
+    assert not cap.found and cap.reason == "scanned-needs-ocr"
+
+
+def test_invisible_text_layer_alone_marks_a_scan(tmp_path):
+    doc = pymupdf.open()
+    page = doc.new_page()
+    page.insert_text((72, 200), "words drawn as pixels elsewhere", fontsize=14, render_mode=3)
+    pdf = tmp_path / "ocrlayer.pdf"
+    doc.save(str(pdf))
+    cap = capture_passage(pdf, "drawn as pixels", out=tmp_path / "shot", ocr=None)
+    assert not cap.found and cap.reason == "scanned-needs-ocr"
+    assert cap.details["invisible_text"] is True
+
+
+def test_word_boundaries_count(tmp_path):
+    doc = pymupdf.open()
+    doc.new_page().insert_text((72, 200), "the therapist said the accurate rose was fine", fontsize=14)
+    pdf = tmp_path / "words.pdf"
+    doc.save(str(pdf))
+    assert not capture_passage(pdf, "the rapist said", out=tmp_path / "a").found
+    assert not capture_passage(pdf, "rate rose", out=tmp_path / "b").found
+    assert capture_passage(pdf, "accurate rose", out=tmp_path / "c").found
+
+
+def test_rotated_page_boxes_land_on_the_glyphs(tmp_path):
+    pdf = _write_born_digital(tmp_path / "paper.pdf", pages=1)
+    doc = pymupdf.open(str(pdf))
+    doc[0].set_rotation(90)
+    rotated = tmp_path / "rotated.pdf"
+    doc.save(str(rotated))
+    cap = capture_passage(rotated, "rate rose sharply once reviews", out=tmp_path / "shot")
+    assert cap.found and _ink_fraction(cap) > 0.05
+
+
+def test_passages_at_page_edges_and_long_ones_stay_on_the_image(tmp_path):
+    doc = pymupdf.open()
+    wide = doc.new_page(width=1600, height=400)  # wider than 16:9
+    wide.insert_text((20, 200), "left edge words here", fontsize=14)
+    tall = doc.new_page(width=612, height=792)
+    for i in range(30):
+        tall.insert_text((72, 60 + i * 23), f"line number {i} of a very long quote", fontsize=12)
+    pdf = tmp_path / "edges.pdf"
+    doc.save(str(pdf))
+    for quote, name in [
+        ("left edge words here", "a"),
+        (" ".join(f"line number {i} of a very long quote" for i in range(30)), "b"),
+    ]:
+        cap = capture_passage(pdf, quote, out=tmp_path / name)
+        W, H = cap.size
+        assert cap.found, cap.reason
+        assert all(0 <= r[0] and 0 <= r[1] and r[2] <= W and r[3] <= H for r in cap.rects)
+        assert _ink_fraction(cap) > 0.05
 
 
 def test_scanned_page_with_ocr_that_does_not_match_is_not_found(tmp_path):
@@ -142,8 +232,8 @@ def test_scanned_page_real_ocr_lands_on_the_glyphs(tmp_path):
     assert cap.found and cap.verified_by == "ocr", cap.details
     assert _ink_fraction(cap) > 0.05
     # The shifted text layer's boxes would have landed on blank paper:
-    layer = capture_passage(
-        pdf, "rate rose sharply once reviews moved earlier", out=tmp_path / "layer",
-        scan_coverage=1.01,  # pretend it is born-digital, to see where the layer points
+    layer = Capture(
+        png=cap.png, size=cap.size, found=True, verified_by="probe",
+        rects=tuple(tuple(r) for r in cap.details["text_layer_rects"]),
     )  # fmt: skip
-    assert layer.verified_by == "pdf-text" and _ink_fraction(layer) < 0.02
+    assert _ink_fraction(layer) < 0.02

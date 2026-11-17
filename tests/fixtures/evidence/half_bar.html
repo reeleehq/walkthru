@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>A thin bar over the top half of the quoted line</title>
+<style>
+  body { font: 20px/1.5 Georgia, serif; color: #222; background: #fff; max-width: 760px; margin: 0 auto; padding: 24px; }
+  .spacer { height: 1400px; }
+  /* The quote is centred on screen; this bar covers the upper half of its line, not its centre. */
+  #bar { position: fixed; left: 0; right: 0; top: calc(50% - 12px); height: 10px; background: #c00; z-index: 5; }
+</style>
+</head>
+<body>
+<div id="bar"></div>
+<div class="spacer"></div>
+<p>Half of this line is hidden by a thin red bar.</p>
+<div class="spacer"></div>
+</body>
+</html>

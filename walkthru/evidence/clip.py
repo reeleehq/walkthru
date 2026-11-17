@@ -16,7 +16,9 @@ move does not step a pixel at a time. :func:`iter_highlight_frames` is the pure 
 
 from __future__ import annotations
 
+import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 from typing import Any, Callable, Iterable, Iterator, Optional, Sequence, Union
 
@@ -174,17 +176,33 @@ def _encode_argv(
 
 
 def _ffmpeg_encode(argv: Sequence[str], frames: Iterable[bytes]) -> None:
-    proc = subprocess.Popen(list(argv), stdin=subprocess.PIPE, stderr=subprocess.PIPE)
-    try:
-        for frame in frames:
-            proc.stdin.write(frame)
-    finally:
-        proc.stdin.close()
-        err = proc.stderr.read().decode(errors="replace")
-        proc.wait()
-    if proc.returncode:
-        raise RuntimeError(
-            f"ffmpeg failed encoding the highlight clip:\n{err.strip()[-800:]}"
+    """Pipe ``frames`` into ffmpeg; raise with ffmpeg's own message if it fails or exits early."""
+    with (
+        tempfile.TemporaryFile() as err
+    ):  # a file, not a pipe: a chatty ffmpeg cannot block
+        proc = subprocess.Popen(list(argv), stdin=subprocess.PIPE, stderr=err)
+        try:
+            for frame in frames:
+                proc.stdin.write(frame)
+        except BrokenPipeError:
+            pass  # ffmpeg died; its exit status and stderr say why
+        finally:
+            try:
+                proc.stdin.close()
+            except BrokenPipeError:
+                pass
+            proc.wait()
+        if proc.returncode:
+            err.seek(0)
+            message = err.read().decode(errors="replace").strip()[-800:]
+            raise RuntimeError(f"ffmpeg failed encoding the highlight clip:\n{message}")
+
+
+def _check_ffmpeg(ffmpeg: str) -> None:
+    if shutil.which(ffmpeg) is None:
+        raise FileNotFoundError(
+            f"{ffmpeg} not found on PATH. Install ffmpeg: `brew install ffmpeg` (macOS), "
+            "`apt install ffmpeg` (Debian/Ubuntu), or see https://ffmpeg.org/download.html"
         )
 
 
@@ -213,9 +231,7 @@ def render_highlight_clip(
     out = Path(out)
     out.parent.mkdir(parents=True, exist_ok=True)
     if encoder is None:
-        from walkthru.adapters.gif.render_target import check_ffmpeg
-
-        check_ffmpeg(ffmpeg=ffmpeg, ffprobe=ffmpeg.replace("ffmpeg", "ffprobe"))
+        _check_ffmpeg(ffmpeg)
         encoder = _ffmpeg_encode
     frames = iter_highlight_frames(
         capture, duration=duration, sweep=sweep, fps=fps, size=size, **frame_options

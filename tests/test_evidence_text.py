@@ -10,6 +10,7 @@ from walkthru.evidence import (
     normalize_text,
     skeleton,
 )
+from walkthru.evidence.text import tokens_agree
 
 
 def test_normalize_folds_typography_not_wording():
@@ -19,15 +20,19 @@ def test_normalize_folds_typography_not_wording():
     assert normalize_text("cat") != normalize_text("cut")
 
 
-def test_skeleton_ignores_line_break_hyphens():
-    assert skeleton("recog-\nnition") == skeleton("recognition")
-    assert skeleton("self-driven") == skeleton("self driven") == skeleton("selfdriven")
+def test_skeleton_drops_hyphens_but_keeps_word_boundaries():
+    assert skeleton("self-driven") == skeleton("selfdriven")
+    assert skeleton("rose \u2014 sharply") == skeleton("rose sharply")
+    assert skeleton("the rapist") != skeleton("therapist")
 
 
 def test_find_word_run():
     words = ["It", "was", "the", "recog-", "nition", "rate", "that", "rose."]
-    assert find_word_run(words, "recognition rate") == (3, 5)
-    assert find_word_run(words, "rate that rose") == (5, 7)
+    ends = [False, False, False, True, False, False, False, True]
+    assert find_word_run(words, "recognition rate", line_ends=ends) == (3, 5)
+    assert find_word_run(words, "recognition rate") is None, "a hyphen mid-line is not a break"
+    assert find_word_run(words, "rate that rose", line_ends=ends) == (5, 7)
+    assert find_word_run(["self-", "driven", "cars"], "self-driven cars", line_ends=[True, False, False]) == (0, 2)
     assert find_word_run(words, "absent words") is None
     assert find_word_run(words, "") is None
 
@@ -37,6 +42,14 @@ def test_fuzzy_word_run_tolerates_ocr_noise():
     first, last, score = fuzzy_word_run(words, "The quick brown fox jumps")
     assert (first, last) == (2, 6) and score > 80
     assert fuzzy_word_run(["lorem", "ipsum"], "The quick brown fox")[2] < 60
+
+
+def test_tokens_agree_rejects_meaning_changes():
+    assert tokens_agree("The qu1ck brovvn fox", "the quick brown fox")
+    assert tokens_agree("recog nition rate", "recognition rate")
+    assert not tokens_agree("the drug did reduce it", "the drug did not reduce it")
+    assert not tokens_agree("rose by 21 %", "rose by 12 %")
+    assert not tokens_agree("a b c extra", "a b c")
 
 
 def test_merge_line_boxes_keeps_columns_apart_and_orders_by_line():

@@ -34,17 +34,27 @@ from walkthru.evidence.clip import (
 )
 from walkthru.evidence.html import (
     DEFAULT_DISMISS_LABELS,
+    PASSAGE_LOCATE_JS,
+    PASSAGE_VERIFY_JS,
     capture_html,
+    judge_passage,
+    locate_args,
     open_capture_page,
 )
 from walkthru.evidence.marker import apply_marker
-from walkthru.evidence.pdf import capture_pdf, ocracy_words, page_image_coverage
+from walkthru.evidence.pdf import (
+    capture_pdf,
+    has_invisible_text,
+    ocracy_words,
+    page_image_coverage,
+)
 from walkthru.evidence.text import (
     find_word_run,
     fuzzy_word_run,
     merge_line_boxes,
     normalize_text,
     skeleton,
+    tokens_agree,
 )
 
 __all__ = [
@@ -55,6 +65,12 @@ __all__ = [
     "capture_pdf",
     "open_capture_page",
     "DEFAULT_DISMISS_LABELS",
+    "PASSAGE_LOCATE_JS",
+    "PASSAGE_VERIFY_JS",
+    "locate_args",
+    "judge_passage",
+    "has_invisible_text",
+    "tokens_agree",
     "render_highlight_clip",
     "iter_highlight_frames",
     "apply_marker",

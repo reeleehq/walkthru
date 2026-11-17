@@ -85,6 +85,48 @@ def test_a_range_spanning_hidden_text_is_not_verified(page, tmp_path):
     assert "REDACTED" in cap.matched
 
 
+def test_a_cover_inside_the_quotes_own_element_is_occluded(page, tmp_path):
+    cap = _capture(
+        page, "nested_overlay.html", "The premium sentence hides behind a curtain", tmp_path,
+        hide_overlays=False,
+    )  # fmt: skip
+    assert not cap.found and cap.reason == "occluded"
+
+
+def test_a_bar_over_part_of_the_line_is_occluded(page, tmp_path):
+    cap = _capture(page, "half_bar.html", "Half of this line is hidden by a thin red bar", tmp_path)
+    assert not cap.found and cap.reason == "occluded"
+
+
+def test_text_drawn_at_zero_size_is_not_verified(page, tmp_path):
+    # The page visibly reads "did reduce"; the DOM also holds a zero-size "not".
+    cap = _capture(page, "article.html", "The new drug did not reduce the symptoms", tmp_path)
+    assert not cap.found and cap.reason == "invisible"
+
+
+def test_block_boundaries_separate_words(page, tmp_path):
+    fused = _capture(page, "article.html", "ends with paraStart of the next", tmp_path)
+    assert not fused.found and fused.reason == "not-in-text"
+    spanning = _capture(page, "article.html", "ends with para Start of the next one", tmp_path)
+    assert spanning.found, spanning.reason
+    assert len(spanning.rects) == 2
+
+
+def test_locate_and_verify_without_scrolling(page, tmp_path):
+    from walkthru.evidence import PASSAGE_LOCATE_JS, PASSAGE_VERIFY_JS, judge_passage, locate_args
+
+    page.goto((FIXTURES / "article.html").as_uri())
+    quote = "most defects arise early"
+    before = page.evaluate("scrollY")
+    assert page.evaluate(PASSAGE_LOCATE_JS, locate_args(quote, key="a", scroll=False))["found"]
+    assert page.evaluate("scrollY") == before, "scroll=False leaves the page where it was"
+    assert judge_passage(page.evaluate(PASSAGE_VERIFY_JS, {"key": "a"}), quote)["reason"] == "off-screen"
+    page.evaluate(PASSAGE_LOCATE_JS, locate_args("Opening paragraph", key="b", scroll=False))
+    assert judge_passage(page.evaluate(PASSAGE_VERIFY_JS, {"key": "b"}), "Opening paragraph")["found"]
+    # Two keys, two ranges: locating "b" did not overwrite "a".
+    assert "most defects" in page.evaluate(PASSAGE_VERIFY_JS, {"key": "a"})["matched"]
+
+
 def test_quote_inside_a_scrolling_panel_is_scrolled_into_view(page, tmp_path):
     cap = _capture(page, "article.html", "the sentence nobody scrolls to", tmp_path)
     assert cap.found, cap.reason
