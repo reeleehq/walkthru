@@ -9,6 +9,8 @@ engine**. It does **not** render the final video — it hands a validated artifa
 renderer (the `reelee` ecosystem, Remotion, moviepy/ffmpeg, …). *Owning representation, not
 pixels, is the load-bearing boundary of the whole design.*
 
+It also shows **cited sources** on screen: capture a web page or PDF at a quoted passage, with the passage's boxes verified, and render a clip where a highlighter sweeps across it in sync with narration ([below](#show-a-source-on-screen-its-quoted-passage-highlighted)).
+
 ## Two modes, one data model, one engine
 
 - **Generative** — an author supplies a Demo Document (commands + annotations); `walkthru`
@@ -116,6 +118,37 @@ Because each segment is synthesized and measured independently, the beat boundar
 assembler is an injected seam, so the whole flow is testable with fakes and pulls in no media stack;
 `MixingSynthesizer` (the `[synth]` extra) is the hosted-voice tier. See `examples/narration_demo.py`
 for an offline run (no API key) and `DECISIONS.md` §D8/§D12.
+
+## Show a source on screen, its quoted passage highlighted
+
+For explainer, educational or historical videos that cite sources: capture the web page or PDF at the quoted passage, then render a short clip where the camera eases toward the passage and a highlighter sweeps across it while the narration speaks those words.
+
+```bash
+pip install "walkthru[evidence]"      # Playwright + PyMuPDF + Pillow (and ffmpeg on PATH)
+playwright install chromium
+pip install "walkthru[ocr]"           # optional: scanned PDFs (ocracy + Tesseract)
+```
+
+```python
+from walkthru import capture_passage, render_highlight_clip
+
+cap = capture_passage(
+    "https://example.org/article", quote="the exact words being cited", out="shots/a.png"
+)
+render_highlight_clip(cap, "clips/a.mp4", duration=8.0, sweep=(1.0, 3.6))
+```
+
+`sweep=(start, end)` is when, in seconds from the clip's start, the marker crosses the passage: set it to the times the narration speaks the quote (from your TTS or forced-alignment word timings).
+
+**Highlight only what was verified.** `capture.found` is true only when the passage's boxes passed a check, and `capture.rects` is empty otherwise; a clip of an unverified capture is a gentle push-in with no highlight. When that happens, show the page without a highlight and say so (in the script, the description or the log), never draw boxes by hand. `capture.reason` says why (`not-in-text`, `occluded`, `off-screen`, `mismatch`, `ocr-mismatch`, …) and `capture.verified_by` which check passed:
+
+- **Web pages** (`dom`): the quote is located among the *visible* text nodes (typography folded: curly quotes, dashes, ligatures, soft hyphens, whitespace), the DOM range's text must equal the quote, every box must be on screen, and `document.elementFromPoint` at each box's centre must return the element holding that text, which catches cookie walls, sticky bars and clipped text. Consent dialogs are dismissed and large fixed overlays hidden first; each occurrence is tried until one verifies.
+- **Born-digital PDFs** (`pdf-text`): the boxes are those of the very words that spell the quote, matched across line-break hyphenation, merged one bar per line, on a 16:9 window of the page.
+- **Scanned PDFs** (`ocr`): a page covered by an image has a text layer whose boxes can sit well off the glyphs, so they are never used; the window is re-read by OCR and accepted only if the OCR'd words match the quote.
+
+Licences: walkthru is MIT; the `evidence` extra pulls in PyMuPDF, which is AGPL-3.0 (or commercial), so check that fits before you ship software that bundles it. Playwright is Apache-2.0, Pillow is MIT-CMU, and Tesseract is Apache-2.0.
+
+To capture many sources, open one browser and pass it along: `with open_capture_page() as page: capture_passage(url, quote, out=..., page=page)` (from `walkthru.evidence`). Each capture writes a JSON sidecar beside its PNG, so `render_highlight_clip("shots/a.json", ...)` works in another process. Light pages get a multiply-blend yellow marker; dark pages an amber tint and underline, since multiply is invisible on dark themes.
 
 ## Ecosystem-biased, ecosystem-independent
 

@@ -11,6 +11,11 @@ description: >-
   walkthrough/tour with walkthru", "play this demo and record it", "turn my
   clicks into a demo", "add a highlight + narration to step 3", or "export
   captions/video from my demo" — including when they don't name the exact API.
+  Also use when an explainer, educational, historical or commentary video cites
+  a source and should show it on screen: "show the source with the quoted
+  passage highlighted, in sync with narration", "screenshot this article at the
+  quote", "highlight the sentence in this PDF", "evidence shot", "cite the
+  paper on screen" (capture_passage + render_highlight_clip, §8).
 ---
 
 # Using walkthru
@@ -273,6 +278,45 @@ import { demoDocumentSchema, type DemoDocument } from "acture-walkthru";
 const doc: DemoDocument = demoDocumentSchema.parse(JSON.parse(jsonString));
 // Unknown cue types / wrong field types are rejected (the unions are closed).
 ```
+
+## 8. Show a cited source, its quoted passage highlighted
+
+For a video that cites sources (explainer, history, commentary, a paper walk-through): capture the
+web page or PDF at the quote, then render a clip where the camera eases toward the passage and a
+highlighter sweeps across it while the narration speaks those words. Needs the `evidence` extra
+(Playwright + PyMuPDF + Pillow, ffmpeg on PATH; `playwright install chromium`), and `ocr`
+(ocracy + Tesseract) for scanned PDFs.
+
+```python
+from walkthru import capture_passage, render_highlight_clip
+from walkthru.evidence import open_capture_page
+
+with open_capture_page() as page:  # one browser for many sources
+    cap = capture_passage(url, quote="the exact words", out="shots/s1.png", page=page)
+pdf_cap = capture_passage("paper.pdf", quote="a sentence in the paper", out="shots/s2.png")
+
+# sweep = (start, end) seconds from the clip's start: when the narration speaks the quote
+render_highlight_clip(cap, "clips/s1.mp4", duration=8.0, sweep=(1.0, 3.6))
+```
+
+The rules:
+
+- **Highlight only what verification passed.** `cap.found` is true only when the boxes were
+  verified, and `cap.rects` is empty otherwise. Never draw boxes yourself from a failed capture.
+- **When it was not verified, show the page without a highlight and say so** (in the script, the
+  description, or your report). `render_highlight_clip` does exactly that for an unverified
+  capture: a gentle push-in, no marker. `cap.reason` says why: `not-in-text` (quote not on the
+  page as visible text — check the wording), `occluded` (a banner or dialog covers it),
+  `off-screen` (the quote is taller than the viewport — quote less), `mismatch`, `ocr-mismatch`,
+  `scanned-needs-ocr` (install the `ocr` extra).
+- `cap.verified_by` says how: `dom` (range text equals the quote, every box on screen, and the
+  element at each box centre is the one holding that text), `pdf-text` (born-digital text layer;
+  hyphenated line breaks are fine), `ocr` (scanned page re-read from pixels; its own text layer's
+  boxes are never trusted).
+- Quote the source verbatim; typography (curly quotes, dashes, ligatures, case, whitespace) is
+  folded, wording is not. Pass `nth=` to pin an occurrence; by default each is tried in turn.
+- Captures write a JSON sidecar beside the PNG; `render_highlight_clip("shots/s1.json", ...)` works
+  in another process. Not a Demo Document cue (yet): the result is a standalone clip to cut in.
 
 ## Gotchas
 

@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Consent dialog fixture</title>
+<style>
+  body { font: 20px/1.5 Georgia, serif; color: #222; background: #fff; max-width: 760px; margin: 0 auto; padding: 24px; }
+  .spacer { height: 1400px; }
+  #consent { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.6); z-index: 100;
+             display: flex; align-items: center; justify-content: center; }
+  #consent .box { background: #fff; padding: 24px; }
+</style>
+</head>
+<body>
+<div id="consent" role="dialog">
+  <div class="box">We use cookies. <button onclick="document.getElementById('consent').remove()">Accept all</button></div>
+</div>
+<div class="spacer"></div>
+<p>Behind the cookie wall lies the passage we came for.</p>
+<div class="spacer"></div>
+</body>
+</html>

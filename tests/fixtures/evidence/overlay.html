@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Overlay fixture</title>
+<style>
+  body { font: 20px/1.5 Georgia, serif; color: #222; background: #fff; max-width: 760px; margin: 0 auto; padding: 24px; }
+  .spacer { height: 1400px; }
+  /* A sticky promo bar across the middle of the viewport: too small to be auto-hidden as a
+     modal, big enough to cover a quote centred on screen. */
+  #promo { position: fixed; left: 0; right: 0; top: 40%; height: 20%; background: #0a4; color: #fff;
+           z-index: 10; display: flex; align-items: center; justify-content: center; }
+</style>
+</head>
+<body>
+<div id="promo">Subscribe for more articles like this one</div>
+<div class="spacer"></div>
+<p>This sentence sits under a promotional banner when centred.</p>
+<div class="spacer"></div>
+</body>
+</html>

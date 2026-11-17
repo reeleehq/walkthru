@@ -492,6 +492,18 @@ and the ffmpeg duration test pin the replacement.
 
 ---
 
+## D18. A cited source is a verified capture and a clip, not (yet) a Demo Document cue — **[call]**
+
+[#40](https://github.com/reeleehq/walkthru/issues/40) asked for a quoted passage on a web page or PDF, highlighted in sync with narration. It ships as `walkthru.evidence`, a function API: `capture_passage(source, quote, *, out) -> Capture` and `render_highlight_clip(capture, out, *, duration, sweep)`.
+
+- **Verification is part of the result.** `Capture.found` is true only when a check passed (`verified_by`: `dom`, `pdf-text` or `ocr`), and the type refuses rects on an unverified capture, so no caller can draw a highlight over text that was not confirmed. An unverified capture renders as a push-in with no marker.
+- **The DOM hit test checks the element that holds each text node**, not any element intersecting the range. The looser form accepts an ancestor such as `body`, which is what `elementFromPoint` returns over text clipped by `overflow: hidden`; a test pins the difference.
+- **Scanned PDF pages never use their text layer's boxes** (they can sit tens of pixels off the glyphs); the rendered window is re-read through an `ocr` seam (default `ocracy` + Tesseract, optional extra) and accepted only on a fuzzy match.
+- **No schema change in v1.** A text-range target and a marker cue would touch the SSOT, the JSON Schema, the generated Zod and every cue renderer, for a caller that today wants a standalone clip to cut in. Deferred to [#41](https://github.com/reeleehq/walkthru/issues/41), together with deriving the sweep from narration word timings.
+- **Outside the firewall, without an extra at import.** Vendors (Playwright, PyMuPDF, Pillow, ocracy) are imported inside the functions that use them, and the root re-exports `capture_passage`, `render_highlight_clip` and `Capture` lazily (PEP 562), so `import walkthru` stays pydantic-only; a subprocess test enforces it.
+
+---
+
 ## Open judgment calls deferred to issues (not yet decided)
 
 - Whether the Python **`play()` mirror** is the engine or TS gets its own live engine —
