@@ -22,7 +22,9 @@ text = "MIT"
 Homepage = "https://github.com/thorwhalen/walkthru"
 
 [project.optional-dependencies]
-testing = []
+# Installed by CI ([tool.wads.ci.install] below) so the PDF, marker and clip tests of
+# walkthru.evidence run there; the browser tests skip unless Playwright's browsers are present.
+testing = ["pymupdf", "pillow"]
 # The Playwright adapters (walkthru.adapters.playwright: ElementLocator + Recorder +
 # ReadinessWaiter) — an optional
 # adapter behind the ports firewall, never a hard dependency of the core. Needed only to drive a
@@ -35,6 +37,12 @@ reelee = ["reelee", "burns", "mixing[media]"]
 # An optional adapter behind the ports firewall; the synth itself is duck-typed and unit-tested
 # without it (injected seams). See DECISIONS.md §D12.
 synth = ["mixing[media]"]
+# walkthru.evidence: capture a cited web page (Playwright) or PDF (PyMuPDF) at a quoted passage,
+# verify the passage's boxes, and render a highlight clip (Pillow + ffmpeg on PATH). Imported
+# lazily, so the core stays dependency-free. See the README section on citing sources.
+evidence = ["playwright", "pymupdf", "pillow"]
+# Re-box scanned PDF pages from OCR'd pixels (ocracy + Tesseract); rapidfuzz scores the match.
+ocr = ["ocracy", "rapidfuzz"]
 
 [tool.ruff]
 line-length = 88
@@ -78,6 +86,9 @@ markers = [
 # ============================================================================
 [tool.wads.ci]
 project_name = "walkthru"
+
+[tool.wads.ci.install]
+extras = "testing"
 
 [tool.wads.ci.quality.ruff]
 enabled = true

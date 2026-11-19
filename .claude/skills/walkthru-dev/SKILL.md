@@ -71,6 +71,9 @@ walkthru/                  # Python: the SSOT + pure engine + ports + adapters
     playwright/            # ElementLocator + Recorder + ReadinessWaiter over a page
     export/                # dependency-free: JSON target + WebVTT captions
   ecosystem/reelee/        # first real RenderTarget: Demo Document → Ken Burns mp4
+  evidence/                # cited source → verified passage boxes → highlight clip
+                           #   (vendors imported lazily; root re-exports are PEP 562 lazy,
+                           #   so `import walkthru` stays pydantic-only — a test enforces it)
 schema/
   demo-document.schema.json  # committed JSON Schema emitted by schema.py (guarded)
   fixtures/                   # minimal-demo.json, full-demo.json (cross-lang contract)

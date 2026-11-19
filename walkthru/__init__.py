@@ -30,6 +30,13 @@ Quickstart::
         return {"ok": True}
 
     asyncio.run(play(doc, executor))
+
+Show a cited source with its quoted passage highlighted (the ``evidence`` extra)::
+
+    from walkthru import capture_passage, render_highlight_clip
+
+    cap = capture_passage(url, quote="the exact words", out="shots/source.png")
+    render_highlight_clip(cap, "clips/source.mp4", duration=8.0, sweep=(1.0, 3.6))
 """
 
 from walkthru.core import (  # noqa: F401
@@ -88,6 +95,21 @@ from walkthru.narration import (
 )
 from walkthru.observers import WallClockPacer
 
+#: Names re-exported lazily from :mod:`walkthru.evidence` (PEP 562): importing ``walkthru`` must
+#: not import that module, whose functions reach for Playwright, PyMuPDF and Pillow on use.
+_LAZY_EVIDENCE = ("Capture", "capture_passage", "render_highlight_clip")
+
+
+def __getattr__(name):
+    if name in _LAZY_EVIDENCE:
+        from walkthru import evidence
+
+        value = getattr(evidence, name)
+        globals()[name] = value
+        return value
+    raise AttributeError(f"module 'walkthru' has no attribute {name!r}")
+
+
 __version__ = "0.0.1"
 
 __all__ = [
@@ -143,4 +165,7 @@ __all__ = [
     "pace_steps_to_narration",
     "assemble_narration_audio",
     "narration_slots",
+    "Capture",
+    "capture_passage",
+    "render_highlight_clip",
 ]
