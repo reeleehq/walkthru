@@ -133,7 +133,9 @@ pip install "walkthru[ocr]"           # optional: scanned PDFs (ocracy + Tessera
 from walkthru import capture_passage, render_highlight_clip
 
 cap = capture_passage(
-    "https://example.org/article", quote="the exact words being cited", out="shots/a.png"
+    "https://example.org/article",
+    quote="the exact words being cited",
+    out="shots/a.png",
 )
 render_highlight_clip(cap, "clips/a.mp4", duration=8.0, sweep=(1.0, 3.6))
 ```

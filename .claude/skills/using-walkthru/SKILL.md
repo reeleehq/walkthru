@@ -293,7 +293,9 @@ from walkthru.evidence import open_capture_page
 
 with open_capture_page() as page:  # one browser for many sources
     cap = capture_passage(url, quote="the exact words", out="shots/s1.png", page=page)
-pdf_cap = capture_passage("paper.pdf", quote="a sentence in the paper", out="shots/s2.png")
+pdf_cap = capture_passage(
+    "paper.pdf", quote="a sentence in the paper", out="shots/s2.png"
+)
 
 # sweep = (start, end) seconds from the clip's start: when the narration speaks the quote
 render_highlight_clip(cap, "clips/s1.mp4", duration=8.0, sweep=(1.0, 3.6))
