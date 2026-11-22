@@ -34,6 +34,7 @@ from walkthru.ecosystem.reelee import (  # noqa: E402
     ReeleeRenderTarget,
     default_asset_resolver,
     render_demo_video,
+    letterbox_poster,
     render_plans,
     timeline_to_panels,
     timeline_to_plans,
@@ -254,3 +255,61 @@ def test_export_writes_mp4_and_returns_assetref(tmp_path):
     assert ref.uri == str(expected) and ref.mime == "video/mp4"
     assert expected.exists()
     assert len(film.calls) == 1
+
+
+# --- poster composer (letterbox) ---------------------------------------------------
+
+
+def _real_png(tmp_path: Path, name: str, size: tuple) -> AssetRef:
+    pytest.importorskip("PIL")
+    from PIL import Image
+
+    p = tmp_path / name
+    Image.new("RGB", size, "#336699").save(p)
+    return AssetRef(uri=str(p), mime="image/png")
+
+
+def test_letterbox_poster_composes_any_aspect_onto_frame_and_titles_beats(tmp_path):
+    from PIL import Image
+
+    doc = DemoDocument(
+        id="d",
+        sections=[
+            Section(
+                id="sec",
+                title="Chapter One",
+                steps=[
+                    Beat(
+                        id="wide",
+                        beat_kind="broll",
+                        timing=Timing(durationMs=1000),
+                        poster=_real_png(tmp_path, "wide.png", (920, 200)),
+                    ),
+                    Beat(
+                        id="tall",
+                        beat_kind="broll",
+                        timing=Timing(durationMs=1000),
+                        poster=_real_png(tmp_path, "tall.png", (850, 1000)),
+                    ),
+                    Beat(
+                        id="card",
+                        beat_kind="textCard",
+                        timing=Timing(durationMs=1000),
+                        text="Hello",
+                    ),
+                ],
+            )
+        ],
+    )
+    compose = letterbox_poster((1920, 1080), work_dir=tmp_path / "frames", crop_top=900)
+    views = timeline_to_panels(resolve_timeline(doc), poster_composer=compose)
+    assert len(views) == 3
+    for view in views:
+        with Image.open(view.image_path) as img:
+            assert img.size == (1920, 1080)
+
+
+def test_default_composer_is_identity(tmp_path):
+    doc = _demo(tmp_path)
+    plain = timeline_to_panels(resolve_timeline(doc))
+    assert [v.image_path for v in plain] == [v.image_path for v in timeline_to_panels(resolve_timeline(doc), poster_composer=None)]
