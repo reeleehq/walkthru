@@ -144,8 +144,9 @@ guide.export_pdf("guide.pdf")  # optional: printed by pdfdol's headless Chromium
 ```python
 from walkthru.adapters.playwright import film_document, mux_narration
 
-filmed = await film_document(doc, page, "tour.mp4",
-                             gestures={"open-menu": [("glide", menu), ("command",)]})
+filmed = await film_document(
+    doc, page, "tour.mp4", gestures={"open-menu": [("glide", menu), ("command",)]}
+)
 mux_narration("tour.mp4", doc, "tour-narrated.mp4", at_s=filmed.in_points["open-menu"])
 ```
 
