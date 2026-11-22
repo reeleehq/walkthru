@@ -127,10 +127,12 @@ The document that films a tour also makes a visual guide: one annotated still pe
 from walkthru.adapters.playwright import play_stills
 from walkthru.adapters.guide import GuideRenderTarget
 
-shots = await play_stills(doc, page, "stills/", read_only=True)  # {step_id: jpg}, cues drawn on each
+shots = await play_stills(
+    doc, page, "stills/", read_only=True
+)  # {step_id: jpg}, cues drawn on each
 guide = GuideRenderTarget("guide.html", stills=shots)
-await guide.export(doc)              # one HTML file, images inlined
-guide.export_pdf("guide.pdf")        # optional: printed by pdfdol's headless Chromium
+await guide.export(doc)  # one HTML file, images inlined
+guide.export_pdf("guide.pdf")  # optional: printed by pdfdol's headless Chromium
 ```
 
 `read_only=True` aborts the page's non-GET requests while shooting, so a guide can be shot against a live account. A text-card beat becomes prose, a section a chapter.
