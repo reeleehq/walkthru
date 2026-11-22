@@ -88,7 +88,11 @@ def letterbox_poster(
     from PIL import Image, ImageDraw
 
     width, height = size
-    out_dir = Path(work_dir) if work_dir else Path(tempfile.mkdtemp(prefix="walkthru_frames_"))
+    out_dir = (
+        Path(work_dir)
+        if work_dir
+        else Path(tempfile.mkdtemp(prefix="walkthru_frames_"))
+    )
     out_dir.mkdir(parents=True, exist_ok=True)
     strip_h = int(height * strip_height)
 
@@ -109,14 +113,27 @@ def letterbox_poster(
                 still = still.crop((0, 0, still.width, crop_top))
             scale = min(width / still.width, (height - top) / still.height)
             fitted = still.resize(
-                (max(1, round(still.width * scale)), max(1, round(still.height * scale)))
+                (
+                    max(1, round(still.width * scale)),
+                    max(1, round(still.height * scale)),
+                )
             )
-            canvas.paste(fitted, ((width - fitted.width) // 2, top + (height - top - fitted.height) // 2))
+            canvas.paste(
+                fitted,
+                (
+                    (width - fitted.width) // 2,
+                    top + (height - top - fitted.height) // 2,
+                ),
+            )
         else:
-            _centered_text(draw, (0, top, width, height), card, fill=fg, size=height // 10)
+            _centered_text(
+                draw, (0, top, width, height), card, fill=fg, size=height // 10
+            )
         if label:
             draw.rectangle((0, 0, width, strip_h), fill=strip_bg)
-            _centered_text(draw, (0, 0, width, strip_h), label, fill=fg, size=strip_h // 2)
+            _centered_text(
+                draw, (0, 0, width, strip_h), label, fill=fg, size=strip_h // 2
+            )
         key = hashlib.sha1(
             f"{image}|{step.step_id}|{label}|{card}|{size}|{crop_top}".encode()
         ).hexdigest()[:12]
