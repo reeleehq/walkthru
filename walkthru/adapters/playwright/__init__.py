@@ -24,6 +24,14 @@ from walkthru.adapters.playwright.cues import (
     DomOverlayCueRenderer,
     cue_overlay_payload,
 )
+from walkthru.adapters.playwright.film import (
+    COMMAND_GESTURE,
+    Filmed,
+    LiveCues,
+    arrival_ring,
+    film_document,
+    mux_narration,
+)
 from walkthru.adapters.playwright.gestures import GESTURES, Hand
 from walkthru.adapters.playwright.stills import (
     StillCamera,
@@ -62,6 +70,12 @@ from walkthru.adapters.playwright.recorder import (
 )
 
 __all__ = [
+    "COMMAND_GESTURE",
+    "Filmed",
+    "LiveCues",
+    "arrival_ring",
+    "film_document",
+    "mux_narration",
     "CUE_LAYER_ID",
     "DEFAULT_CUE_COLOR",
     "DomOverlayCueRenderer",
