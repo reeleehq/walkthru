@@ -71,3 +71,57 @@ def test_is_pdf_source(tmp_path):
     page = tmp_path / "page.html"
     page.write_text("<p>hi</p>")
     assert not is_pdf_source(page)
+
+
+def _serve(routes):
+    """A local HTTP server answering ``path -> (content_type, body)``; returns ``(server, base)``."""
+    import threading
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            ctype, body = routes[self.path]
+            self.send_response(200)
+            self.send_header("Content-Type", ctype)
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args):
+            pass
+
+    server = HTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server, f"http://127.0.0.1:{server.server_port}"
+
+
+def test_is_pdf_source_sniffs_extensionless_urls():
+    server, base = _serve(
+        {
+            "/pdf/123": ("application/pdf", b"%PDF-1.4 x"),
+            "/blob/9": ("application/octet-stream", b"%PDF-1.4 x"),
+            "/article": ("text/html", b"<p>hi</p>"),
+        }
+    )
+    try:
+        assert not is_pdf_source(f"{base}/pdf/123")  # off by default: stays offline
+        assert is_pdf_source(f"{base}/pdf/123", sniff=True)
+        assert is_pdf_source(f"{base}/blob/9", sniff=True)  # by %PDF- prefix
+        assert not is_pdf_source(f"{base}/article", sniff=True)
+        assert not is_pdf_source("http://127.0.0.1:9/x", sniff=True)  # unreachable: not a PDF
+        assert is_pdf_source(f"{base}/anything", sniff=lambda url: True)
+    finally:
+        server.shutdown()
+
+
+def test_capture_passage_routes_by_kind_and_sniff(monkeypatch, tmp_path):
+    import pytest
+    import walkthru.evidence.pdf as pdf_mod
+    from walkthru.evidence import capture_passage
+
+    seen = []
+    monkeypatch.setattr(pdf_mod, "capture_pdf", lambda src, q, **kw: seen.append(src) or "pdf")
+    assert capture_passage("http://x.test/pdf/1", "q", out=tmp_path / "o", kind="pdf") == "pdf"
+    assert capture_passage("http://x.test/pdf/2", "q", out=tmp_path / "o", sniff=lambda u: True) == "pdf"
+    assert seen == ["http://x.test/pdf/1", "http://x.test/pdf/2"]
+    with pytest.raises(ValueError, match="kind"):
+        capture_passage("x", "q", out=tmp_path / "o", kind="doc")
