@@ -252,7 +252,9 @@ def _ocr_search(
             i, j, score = run
             text = " ".join(w for w, _ in words[i : j + 1])
             if score < min_ratio or not tokens_agree(text, quote):
-                details["ocr_score"] = max(details.get("ocr_score", 0.0), round(score, 1))
+                details["ocr_score"] = max(
+                    details.get("ocr_score", 0.0), round(score, 1)
+                )
                 continue
             boxes = merge_line_boxes(b for _, b in words[i : j + 1])
             details.update(ocr_score=round(score, 1), ocr_text=text)
