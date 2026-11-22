@@ -119,6 +119,22 @@ assembler is an injected seam, so the whole flow is testable with fakes and pull
 `MixingSynthesizer` (the `[synth]` extra) is the hosted-voice tier. See `examples/narration_demo.py`
 for an offline run (no API key) and `DECISIONS.md` §D8/§D12.
 
+## A step-by-step guide from the same document
+
+The document that films a tour also makes a visual guide: one annotated still per step (highlight rings, numbered callouts, spotlights drawn on the page as DOM overlays), laid out as one self-contained, phone-readable HTML page with the callout texts listed under each picture and the narration as its caption.
+
+```python
+from walkthru.adapters.playwright import play_stills
+from walkthru.adapters.guide import GuideRenderTarget
+
+shots = await play_stills(doc, page, "stills/", read_only=True)  # {step_id: jpg}, cues drawn on each
+guide = GuideRenderTarget("guide.html", stills=shots)
+await guide.export(doc)              # one HTML file, images inlined
+guide.export_pdf("guide.pdf")        # optional: printed by pdfdol's headless Chromium
+```
+
+`read_only=True` aborts the page's non-GET requests while shooting, so a guide can be shot against a live account. A text-card beat becomes prose, a section a chapter.
+
 ## Show a source on screen, its quoted passage highlighted
 
 For explainer, educational or historical videos that cite sources: capture the web page or PDF at the quoted passage, then render a short clip where the camera eases toward the passage and a highlighter sweeps across it while the narration speaks those words.

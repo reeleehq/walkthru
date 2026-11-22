@@ -62,9 +62,12 @@ async def _click(page: Any, p: Mapping[str, Any]) -> Any:
 
 
 async def _fill(page: Any, p: Mapping[str, Any]) -> Any:
-    return await page.fill(
-        p["selector"], p.get("text", ""), **_rest(p, "selector", "text")
-    )
+    """Type ``text`` into ``selector``. ``value`` (Playwright's own name for it) is accepted
+    too; passing it through as is failed with "got multiple values for argument 'value'"."""
+    if "text" in p and "value" in p and p["text"] != p["value"]:
+        raise ValueError("page.fill: give the text as `text` or `value`, not both")
+    text = p.get("text", p.get("value", ""))
+    return await page.fill(p["selector"], text, **_rest(p, "selector", "text", "value"))
 
 
 async def _press(page: Any, p: Mapping[str, Any]) -> Any:
