@@ -3,8 +3,10 @@
 The three ports that resolve to Playwright on the Python side. All operate on an injected,
 duck-typed Playwright object, so the core stays vendor-free and they are unit-testable without a
 browser; install the optional extra (``pip install walkthru[playwright]``) only to drive a real
-browser. The ``acture`` ``CommandPlayer`` and the driver.js ``CueRenderer`` are the other
-web-first adapters and live on the TS side.
+browser. :class:`DomOverlayCueRenderer` is the Python ``CueRenderer`` (cues as DOM overlays), and
+:func:`play_stills` shoots one annotated still per step (for
+:class:`~walkthru.adapters.guide.GuideRenderTarget`); the driver.js ``CueRenderer`` is its TS
+counterpart.
 
 Two recorders: :class:`PlaywrightRecorder` (Playwright's own WebM screencast, any browser) and
 :class:`CdpScreencastRecorder` (Chrome's DevTools screencast: crisp device-resolution frames with
@@ -16,7 +18,22 @@ from walkthru.adapters.playwright.cursor import (
     cursor_script,
     install_synthetic_cursor,
 )
+from walkthru.adapters.playwright.cues import (
+    CUE_LAYER_ID,
+    DEFAULT_CUE_COLOR,
+    DomOverlayCueRenderer,
+    cue_overlay_payload,
+)
 from walkthru.adapters.playwright.gestures import GESTURES, Hand
+from walkthru.adapters.playwright.stills import (
+    StillCamera,
+    StillsNotTaken,
+    block_writes,
+    default_shoot,
+    play_stills,
+    still_clip,
+    with_posters,
+)
 from walkthru.adapters.playwright.player import (
     PAGE_COMMANDS,
     PlaywrightCommandPlayer,
@@ -45,6 +62,17 @@ from walkthru.adapters.playwright.recorder import (
 )
 
 __all__ = [
+    "CUE_LAYER_ID",
+    "DEFAULT_CUE_COLOR",
+    "DomOverlayCueRenderer",
+    "cue_overlay_payload",
+    "StillCamera",
+    "StillsNotTaken",
+    "block_writes",
+    "default_shoot",
+    "play_stills",
+    "still_clip",
+    "with_posters",
     "GESTURES",
     "Hand",
     "DEFAULT_CURSOR_SIZE",
