@@ -139,7 +139,9 @@ def sniff_pdf_url(url: str, *, timeout: float = DEFAULT_SNIFF_TIMEOUT_S) -> bool
     request = urllib.request.Request(url, headers={"Range": "bytes=0-4"})
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
-            ctype = response.headers.get("Content-Type", "").split(";")[0].strip().lower()
+            ctype = (
+                response.headers.get("Content-Type", "").split(";")[0].strip().lower()
+            )
             if ctype == "application/pdf":
                 return True
             return response.read(5) == b"%PDF-"
