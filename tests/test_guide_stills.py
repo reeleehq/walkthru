@@ -186,7 +186,12 @@ def test_the_camera_shoots_the_union_of_a_steps_targets_in_page_coordinates(tmp_
     )
     renderer = DomOverlayCueRenderer(page, locator=locator)
     cam = StillCamera(
-        page=page, out_dir=tmp_path, renderer=renderer, locator=locator, pad=10
+        page=page,
+        out_dir=tmp_path,
+        renderer=renderer,
+        locator=locator,
+        pad=10,
+        scroll_into_view=False,  # a fake page has no locators to scroll
     )
     step = CommandStep(id="st", command=Command(id="page.wait"), timing=T0)
     a = Anchor(step_id="st")
@@ -248,6 +253,36 @@ def test_simple_markdown_escapes_before_it_formats():
     )
 
 
+def test_a_link_cannot_break_out_of_its_href():
+    html = simple_markdown('[x](https://a"onmouseover="alert(1))')
+    assert '"onmouseover' not in html
+
+
+def test_a_code_span_is_not_formatted_further():
+    assert (
+        simple_markdown("`**a**` **b**")
+        == "<p><code>**a**</code> <strong>b</strong></p>"
+    )
+
+
+def test_a_poster_uri_cannot_inject_attributes_and_relative_posters_read_from_base_dir(
+    tmp_path,
+):
+    from walkthru.core.schema import AssetRef
+
+    (tmp_path / "shots").mkdir()
+    (tmp_path / "shots" / "open.png").write_bytes(b"png")
+    doc = _doc()
+    steps = doc.sections[0].steps
+    steps[1] = steps[1].model_copy(update={"poster": AssetRef(uri="shots/open.png")})
+    steps[2] = steps[2].model_copy(
+        update={"poster": AssetRef(uri='https://x/y.png" onerror="alert(1)')}
+    )
+    html = guide_html(doc, base_dir=tmp_path)
+    assert "data:image/png;base64," in html
+    assert 'onerror="alert' not in html
+
+
 def test_guide_lays_out_text_cards_figures_callouts_and_narration(tmp_path):
     png = tmp_path / "open.png"
     png.write_bytes(b"\x89PNG fake")
@@ -290,6 +325,61 @@ def test_the_target_writes_one_file_and_falls_back_to_posters(tmp_path):
     assert "data:image/jpeg;base64," in out.read_text()
 
 
+def test_callout_numbers_count_callouts_that_could_not_be_drawn(tmp_path):
+    """A callout whose target is missing, or that has none, still takes its number, so badge
+    n stays next to the guide's list item n."""
+    page = _FakePage()
+    locator = _FakeLocator({"#b": Rect(x=0, y=0, width=10, height=10)})
+    renderer = DomOverlayCueRenderer(page, locator=locator)
+    cam = StillCamera(
+        page=page,
+        out_dir=tmp_path,
+        renderer=renderer,
+        locator=locator,
+        scroll_into_view=False,
+    )
+    step = CommandStep(id="st", command=Command(id="page.wait"), timing=T0)
+    a = Anchor(step_id="st")
+
+    async def go():
+        await cam(StepEnter(step))
+        for cue in (
+            CalloutCue(id="gone", anchor=a, text="one", target=_target("#missing")),
+            CalloutCue(id="free", anchor=a, text="two"),
+            CalloutCue(id="here", anchor=a, text="three", target=_target("#b")),
+        ):
+            await cam(CueBegin(cue))
+
+    asyncio.run(go())
+    drawn = [p for p in page.evaluated if p and p.get("kind") == "callout"]
+    assert [p["number"] for p in drawn] == [3]
+
+
+def test_the_camera_stops_shooting_at_the_first_failed_command(tmp_path):
+    from walkthru.core.events import CommandError
+
+    page = _FakePage()
+    cam = StillCamera(
+        page=page,
+        out_dir=tmp_path,
+        renderer=DomOverlayCueRenderer(page),
+        locator=_FakeLocator({}),
+        scroll_into_view=False,
+    )
+    bad = CommandStep(id="bad", command=Command(id="page.click"), timing=T0)
+    after = CommandStep(id="after", command=Command(id="page.wait"), timing=T0)
+
+    async def go():
+        await cam(StepEnter(bad))
+        await cam(CommandError(bad.command, RuntimeError("no"), bad))
+        await cam(StepExit(bad))
+        await cam(StepEnter(after))
+        await cam(StepExit(after))
+
+    asyncio.run(go())
+    assert cam.shots == {} and cam.failed is not None and page.shots == []
+
+
 # --- page.fill: `value` is accepted (#45's trap) -----------------------------------
 
 
@@ -327,6 +417,120 @@ PAGE_HTML = """<!doctype html><html><body style="margin:0;font:16px sans-serif;b
 <button id="save" style="position:absolute;left:40px;top:1000px;width:120px;height:40px">Save</button>
 <form id="f" method="post" action="/never"></form>
 <div style="height:1500px"></div></body></html>"""
+
+
+async def _with_page(fn):
+    """Run ``fn(page)`` in headless Chromium, or skip without a Playwright browser."""
+    from playwright.async_api import async_playwright
+
+    async with async_playwright() as pw:
+        try:
+            browser = await pw.chromium.launch()
+        except Exception as e:  # browsers not installed (`playwright install chromium`)
+            pytest.skip(f"no Playwright browser available: {e}")
+        page = await browser.new_page(viewport={"width": 800, "height": 600})
+        try:
+            return await fn(page)
+        finally:
+            await browser.close()
+
+
+def test_block_writes_aborts_posts_and_lets_gets_reach_other_routes():
+    """Non-GET requests of the whole context are aborted (a popup's too), and a GET goes on
+    to the context's other route handlers (fallback, not continue)."""
+    pytest.importorskip("playwright.async_api")
+    from walkthru.adapters.playwright import block_writes
+
+    async def go(page):
+        async def mock(route):
+            await route.fulfill(
+                status=200, body="<p id=ok>mocked</p>", content_type="text/html"
+            )
+
+        await page.context.route("https://app.invalid/**", mock)
+        lift = await block_writes(page)
+        try:
+            await page.goto("https://app.invalid/home")
+            got = await page.text_content("#ok")
+            posted = await page.evaluate(
+                """() => fetch('https://app.invalid/save', {method: 'POST'})
+                     .then(() => 'sent', () => 'blocked')"""
+            )
+            async with page.context.expect_page() as popup_info:
+                await page.evaluate(
+                    "() => { window.open('https://app.invalid/home'); }"
+                )
+            popup = await popup_info.value
+            await popup.wait_for_load_state()
+            popup_posted = await popup.evaluate(
+                """() => fetch('https://app.invalid/x', {method: 'POST'})
+                     .then(() => 'sent', () => 'blocked')"""
+            )
+        finally:
+            await lift()
+        return got, posted, popup_posted
+
+    assert asyncio.run(_with_page(go)) == ("mocked", "blocked", "blocked")
+
+
+INNER_SCROLL_HTML = """<!doctype html><html><body style="margin:0">
+<div id="pane" style="height:300px;overflow:auto">
+  <div style="height:2000px"></div>
+  <button id="deep" style="display:block;width:100px;height:30px">Deep</button>
+  <div style="height:500px"></div>
+</div></body></html>"""
+
+
+def test_a_target_inside_a_scrolled_container_is_brought_into_view(tmp_path):
+    pytest.importorskip("playwright.async_api")
+    Image = pytest.importorskip("PIL.Image")
+    from walkthru.adapters.playwright import play_stills
+
+    src = tmp_path / "inner.html"
+    src.write_text(INNER_SCROLL_HTML)
+    a = Anchor(step_id="open")
+    doc = DemoDocument(
+        id="inner",
+        sections=[
+            Section(
+                id="s",
+                steps=[
+                    CommandStep(
+                        id="open",
+                        command=Command(id="page.goto", params={"url": src.as_uri()}),
+                        timing=T0,
+                    )
+                ],
+            )
+        ],
+        tracks=Tracks(cues=[HighlightCue(id="h", anchor=a, target=_target("#deep"))]),
+    )
+
+    async def go(page):
+        return await play_stills(doc, page, tmp_path / "s", image_format="png", pad=10)
+
+    shots = asyncio.run(_with_page(go))
+    assert Image.open(shots["open"]).size == (110, 50)  # x=0: the left pad is clamped
+
+
+def test_export_pdf_prints_the_written_guide(tmp_path):
+    pytest.importorskip("pdfdol.chromium")
+    pytest.importorskip("playwright.sync_api")
+    jpg = tmp_path / "p.jpg"
+    jpg.write_bytes(b"\xff\xd8 fake")
+    target = GuideRenderTarget(tmp_path / "g.html", stills={"open": jpg})
+
+    async def go():
+        await target.export(_doc())
+        try:
+            return await target.export_pdf(tmp_path / "g.pdf")
+        except Exception as e:  # noqa: BLE001 - no Chromium for pdfdol here
+            if "Executable doesn't exist" in str(e) or "playwright install" in str(e):
+                pytest.skip(f"no Playwright browser available: {e}")
+            raise
+
+    pdf = asyncio.run(go())
+    assert pdf.read_bytes().startswith(b"%PDF")
 
 
 def test_play_stills_draws_cues_on_a_real_page_and_the_guide_inlines_them(tmp_path):

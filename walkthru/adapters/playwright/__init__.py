@@ -27,6 +27,7 @@ from walkthru.adapters.playwright.cues import (
 from walkthru.adapters.playwright.gestures import GESTURES, Hand
 from walkthru.adapters.playwright.stills import (
     StillCamera,
+    StillsNotTaken,
     block_writes,
     default_shoot,
     play_stills,
@@ -66,6 +67,7 @@ __all__ = [
     "DomOverlayCueRenderer",
     "cue_overlay_payload",
     "StillCamera",
+    "StillsNotTaken",
     "block_writes",
     "default_shoot",
     "play_stills",

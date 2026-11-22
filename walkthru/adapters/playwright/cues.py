@@ -15,8 +15,11 @@ elements in one overlay layer, so a screenshot or a screencast of the page shows
   :class:`~walkthru.adapters.playwright.gestures.Hand` move the pointer).
 
 A cue's rect is what the :class:`~walkthru.ports.ElementLocator` returns (viewport coordinates);
-the overlay script adds the page's scroll offset, so the overlay stays on its element when the page
-scrolls and lands in the right place on a full-page screenshot. Like the rest of this package it
+the overlay script places it relative to the overlay layer's own box (which carries the page's
+scroll), so the overlay stays on its element when the window scrolls and lands in the right place
+on a full-page screenshot. Overlays are placed when drawn: they do not follow an element that
+moves afterwards (a fixed header under a scroll, an inner scroller, a layout shift), and they sit
+under the browser's top layer (an open modal ``<dialog>`` or popover). Like the rest of this package it
 drives an injected, duck-typed page (only ``evaluate`` is used) and imports nothing from
 ``playwright``.
 
@@ -87,7 +90,10 @@ _OVERLAY_SCRIPT = r"""
       height: '0px', overflow: 'visible', pointerEvents: 'none', zIndex: '2147483647'});
     doc.appendChild(layer);
   }
-  const x = p.rect.x + window.scrollX, y = p.rect.y + window.scrollY;
+  // Relative to the layer's own box, not window.scroll: right under a positioned, offset or
+  // zoomed <html> too, and the scroll is in it already.
+  const L = layer.getBoundingClientRect();
+  const x = p.rect.x - L.left, y = p.rect.y - L.top;
   const el = document.createElement('div');
   el.dataset.walkthruCue = p.kind;
   const base = {position: 'absolute', boxSizing: 'border-box', pointerEvents: 'none'};
@@ -220,20 +226,27 @@ class DomOverlayCueRenderer:
 
     @property
     def callouts_shown(self) -> int:
-        """How many callouts are drawn since the last :meth:`clear` (the next badge is this + 1)."""
+        """How many callouts were shown since the last :meth:`clear`, drawn or not (the next
+        badge is this + 1)."""
         return self._callouts
 
     async def show(self, cue: Cue, rect: Optional[Rect] = None) -> None:
         """Draw ``cue`` at ``rect`` (viewport coordinates), resolving its target when ``rect`` is
-        ``None``. A cue with neither draws nothing."""
-        if rect is None and cue.target is not None:
-            rect = await self._locator_().bounds(cue.target)
-        if rect is None:
-            return
+        ``None``. A cue with neither draws nothing.
+
+        A callout takes its number before anything else, even one that cannot be drawn (no
+        target, or a target the locator cannot find, whose ``LookupError`` propagates): the
+        numbers then stay the callouts' order in the step, which is the order a guide lists their
+        texts in.
+        """
         number = None
         if isinstance(cue, CalloutCue):
             self._callouts += 1
             number = self._callouts
+        if rect is None and cue.target is not None:
+            rect = await self._locator_().bounds(cue.target)
+        if rect is None:
+            return
         payload = cue_overlay_payload(
             cue,
             rect,

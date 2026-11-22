@@ -20,8 +20,9 @@ offset), cut to ``max_height`` from the top when given; a step with no targeted 
 the viewport. Per-shot viewport width stays a ``page.set_viewport`` command before the step: a
 short, wide region reads better on a phone when shot narrow.
 
-``read_only=True`` aborts every non-GET request the page makes while the stills are taken, so a
-guide can be shot against a live account without changing it.
+``read_only=True`` aborts every non-GET request of the page's browser context while the stills are
+taken, so a guide can be shot against a live account without posting to it (see
+:func:`block_writes` for what that does not stop).
 """
 
 from __future__ import annotations
@@ -30,8 +31,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Iterable, Mapping, Optional, Union
 
-from walkthru.core.events import CueBegin, StepEnter, StepExit
-from walkthru.core.schema import Beat, DemoDocument, Rect, Step, AssetRef
+from walkthru.core.events import CommandError, CueBegin, StepEnter, StepExit
+from walkthru.core.schema import AssetRef, Beat, CalloutCue, DemoDocument, Rect, Step
 
 if TYPE_CHECKING:  # type-checker only
     from walkthru.ports import CueRenderer, ElementLocator
@@ -40,6 +41,7 @@ __all__ = [
     "DEFAULT_STILL_PAD",
     "DEFAULT_JPEG_QUALITY",
     "StillCamera",
+    "StillsNotTaken",
     "default_shoot",
     "play_stills",
     "still_clip",
@@ -71,15 +73,19 @@ def still_clip(
 ) -> dict:
     """The full-page clip (``{x, y, width, height}``) a still takes.
 
-    ``rects`` are viewport-relative (as a locator returns them); their union is moved by
-    ``scroll``, padded by ``pad``, kept inside the page, and cut to ``max_height`` from its top.
-    No rects: the viewport, in page coordinates.
+    ``rects`` are in **page** coordinates (a locator's viewport rect plus the scroll offset when
+    it was measured, as :class:`StillCamera` records them); their union is padded by ``pad``, kept
+    inside the page, and cut to ``max_height`` from its top. No rects: the viewport at ``scroll``.
 
     >>> still_clip([Rect(x=10, y=10, width=20, height=20), Rect(x=50, y=5, width=10, height=10)],
     ...            scroll=(0, 100), page_size=(800, 2000), viewport=(800, 600), pad=5)
-    {'x': 5.0, 'y': 100.0, 'width': 60.0, 'height': 35.0}
+    {'x': 5.0, 'y': 0.0, 'width': 60.0, 'height': 35.0}
     >>> still_clip([], scroll=(0, 300), page_size=(800, 2000), viewport=(800, 600))
     {'x': 0.0, 'y': 300.0, 'width': 800.0, 'height': 600.0}
+
+    Raises:
+        ValueError: the targets lie outside the page (an element inside a scrolled container
+            that was measured out of view), which would otherwise be a silent 1-pixel still.
     """
     sx, sy = scroll
     pw, ph = page_size
@@ -88,19 +94,25 @@ def still_clip(
         x0, y0 = sx, sy
         x1, y1 = sx + viewport[0], sy + viewport[1]
     else:
-        x0 = min(r.x for r in rects) + sx - pad
-        y0 = min(r.y for r in rects) + sy - pad
-        x1 = max(r.x + r.width for r in rects) + sx + pad
-        y1 = max(r.y + r.height for r in rects) + sy + pad
+        x0 = min(r.x for r in rects) - pad
+        y0 = min(r.y for r in rects) - pad
+        x1 = max(r.x + r.width for r in rects) + pad
+        y1 = max(r.y + r.height for r in rects) + pad
     x0, y0 = max(0.0, x0), max(0.0, y0)
     x1, y1 = min(float(pw), x1), min(float(ph), y1)
+    if x1 - x0 < 1 or y1 - y0 < 1:
+        raise ValueError(
+            f"the still's targets lie outside the {pw}x{ph} page "
+            f"(union {[r.model_dump() for r in rects]}, padded by {pad}): is one inside a "
+            "scrolled container, measured out of view?"
+        )
     if max_height is not None:
         y1 = min(y1, y0 + max_height)
     return {
         "x": float(x0),
         "y": float(y0),
-        "width": float(max(1.0, x1 - x0)),
-        "height": float(max(1.0, y1 - y0)),
+        "width": float(x1 - x0),
+        "height": float(y1 - y0),
     }
 
 
@@ -127,8 +139,14 @@ class StillCamera:
     max_height: Optional[float] = None
     image_format: str = "jpeg"
     quality: int = DEFAULT_JPEG_QUALITY
+    #: Scroll each cue's target into view before measuring it (an element inside a scrolled
+    #: container measures out of view otherwise). Needs a Playwright page.
+    scroll_into_view: bool = True
+    scroll_timeout_ms: int = 2000
     shots: dict[str, Path] = field(default_factory=dict)
     missed: list[tuple[str, str]] = field(default_factory=list)
+    #: The first command that failed; no still is taken from then on (the screen is wrong).
+    failed: Optional[Any] = None
     _rects: list[Rect] = field(default_factory=list, init=False, repr=False)
     _current: Optional[Step] = field(default=None, init=False, repr=False)
 
@@ -140,6 +158,10 @@ class StillCamera:
         self.out_dir = Path(self.out_dir)
 
     async def __call__(self, event: Any) -> None:
+        if isinstance(event, CommandError):
+            if self.failed is None:
+                self.failed = event
+            return
         if isinstance(event, StepEnter):
             self._current, self._rects = event.step, []
         elif isinstance(event, CueBegin) and self._shooting():
@@ -152,23 +174,59 @@ class StillCamera:
                 self._current = None
 
     def _shooting(self) -> bool:
-        return self._current is not None and self.shoot(self._current)
+        return (
+            self.failed is None
+            and self._current is not None
+            and self.shoot(self._current)
+        )
 
     async def _draw(self, cue) -> None:
         rect = None
         if cue.target is not None:
+            if self.scroll_into_view:
+                await self._bring_into_view(cue.target)
             try:
                 rect = await self.locator.bounds(cue.target)
             except LookupError as e:  # the target is not on this page: shoot without it
                 self.missed.append((cue.id, str(e)))
+                if isinstance(cue, CalloutCue):
+                    # still let it take its number, so the badges keep the guide's order
+                    try:
+                        await self.renderer.show(cue, None)
+                    except LookupError:
+                        pass
                 return
-            self._rects.append(rect)
+            g = await self.page.evaluate(_PAGE_GEOMETRY_SCRIPT)
+            self._rects.append(
+                Rect(
+                    x=rect.x + g["sx"],
+                    y=rect.y + g["sy"],
+                    width=rect.width,
+                    height=rect.height,
+                )
+            )
         await self.renderer.show(cue, rect)
+
+    async def _bring_into_view(self, target) -> None:
+        """Scroll the first candidate locator that matches into view (best effort: the locator
+        decides afterwards whether the target is there)."""
+        from walkthru.adapters.playwright.locator import build_locator
+
+        for loc in (target.primary, *target.fallbacks):
+            candidate = build_locator(self.page, loc)
+            if await candidate.count():
+                try:
+                    await candidate.first.scroll_into_view_if_needed(
+                        timeout=self.scroll_timeout_ms
+                    )
+                except Exception:  # noqa: BLE001 - best effort; bounds() reports what is missing
+                    pass
+                return
 
     async def _take(self, step_id: str) -> Path:
         g = await self.page.evaluate(_PAGE_GEOMETRY_SCRIPT)
         clip = still_clip(
-            self._rects,
+            self._rects,  # page coordinates, measured with the scroll of their moment
             scroll=(g["sx"], g["sy"]),
             page_size=(g["pw"], g["ph"]),
             viewport=(g["vw"], g["vh"]),
@@ -185,24 +243,38 @@ class StillCamera:
 
 
 async def block_writes(page: Any) -> Callable[[], Any]:
-    """Abort every non-GET request ``page`` makes; returns an async callable that lifts it.
+    """Abort every non-GET request of ``page``'s browser context (popups included); returns an
+    async callable that lifts it.
 
-    A guide shot against a live account then cannot change it, whatever a step clicks.
+    Requests it lets through go on to any other route handler (``route.fallback``: mocks, HAR
+    replay, auth injection keep working). Limits: a GET with side effects, WebSocket traffic and
+    a service worker's own requests are not stopped, and an app that reads through POST (GraphQL)
+    shows the screens its failed reads leave.
     """
+    context = getattr(page, "context", None) or page
 
     async def handler(route, request=None):
         req = request if request is not None else route.request
         if req.method.upper() in ("GET", "HEAD", "OPTIONS"):
-            await route.continue_()
+            await route.fallback()
         else:
             await route.abort()
 
-    await page.route("**/*", handler)
+    await context.route("**/*", handler)
 
     async def lift():
-        await page.unroute("**/*", handler)
+        await context.unroute("**/*", handler)
 
     return lift
+
+
+class StillsNotTaken(RuntimeError):
+    """A step's command failed, so the stills after it would show the wrong screen. ``shots``
+    holds the stills taken before it."""
+
+    def __init__(self, message: str, *, shots: Mapping[str, Path]):
+        super().__init__(message)
+        self.shots = dict(shots)
 
 
 async def play_stills(
@@ -241,7 +313,8 @@ async def play_stills(
         observers: more engine observers to run alongside the camera.
 
     Raises:
-        RuntimeError: a step's command failed (the stills after it would show the wrong screen).
+        StillsNotTaken: a step's command failed (the stills after it would show the wrong
+            screen); its ``shots`` are the stills taken before it.
     """
     from walkthru.adapters.playwright.cues import DomOverlayCueRenderer
     from walkthru.adapters.playwright.locator import PlaywrightElementLocator
@@ -265,17 +338,19 @@ async def play_stills(
     waiter = waiter or PlaywrightReadinessWaiter(page).wait
     lift = await block_writes(page) if read_only else None
     try:
-        outcome = await play(
-            document, player.play, observers=(camera, *observers), waiter=waiter
-        )
+        await play(document, player.play, observers=(camera, *observers), waiter=waiter)
     finally:
-        if lift is not None:
-            await lift()
-    if not outcome.ok:
-        failures = "; ".join(
-            f"step {e.step.id!r} ({e.command.id}): {e.error!r}" for e in outcome.errors
+        try:  # never leave overlays on the page, whatever stopped the run
+            await camera.renderer.clear()
+        finally:
+            if lift is not None:
+                await lift()
+    if camera.failed is not None:
+        e = camera.failed
+        raise StillsNotTaken(
+            f"stills stopped at step {e.step.id!r} ({e.command.id}): {e.error!r}",
+            shots=camera.shots,
         )
-        raise RuntimeError(f"stills not taken: {failures}")
     return camera.shots
 
 

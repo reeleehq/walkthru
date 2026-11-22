@@ -77,8 +77,8 @@ _ZOOM_SCRIPT = (
     "img.addEventListener('click',function(){img.parentNode.classList.toggle('zoomed');});});"
 )
 
+_CODE_SPAN = re.compile(r"`([^`]+)`")
 _INLINE_RULES = (
-    (re.compile(r"`([^`]+)`"), r"<code>\1</code>"),
     (re.compile(r"\*\*([^*]+)\*\*"), r"<strong>\1</strong>"),
     (re.compile(r"(?<![*\w])\*([^*]+)\*(?![*\w])"), r"<em>\1</em>"),
     (re.compile(r"\[([^\]]+)\]\((https?://[^)\s]+)\)"), r'<a href="\2">\1</a>'),
@@ -96,10 +96,20 @@ def simple_markdown(text: str) -> str:
     """
 
     def inline(s: str) -> str:
-        s = _html.escape(s, quote=False)
+        # quote=True: an escaped `"` cannot close the href a link rule writes
+        s = _html.escape(s, quote=True)
+        codes: list[str] = []
+
+        def stash(m):  # a code span's text is not formatted further
+            codes.append(m.group(1))
+            return f"\x00{len(codes) - 1}\x00"
+
+        s = _CODE_SPAN.sub(stash, s)
         for pattern, repl in _INLINE_RULES:
             s = pattern.sub(repl, s)
-        return s
+        return re.sub(
+            r"\x00(\d+)\x00", lambda m: f"<code>{codes[int(m.group(1))]}</code>", s
+        )
 
     blocks = []
     for block in re.split(r"\n\s*\n", text.strip()):
@@ -121,16 +131,29 @@ def _data_uri(path: Union[str, Path], mime: Optional[str] = None) -> str:
     return f"data:{kind};base64,{base64.b64encode(path.read_bytes()).decode('ascii')}"
 
 
-def _still_of(step: Step, stills: Mapping[str, Union[str, Path]]) -> Optional[str]:
-    """The data URI of ``step``'s still, from ``stills`` or its ``poster`` (a local file)."""
+def _still_of(
+    step: Step, stills: Mapping[str, Union[str, Path]], *, base_dir: Path
+) -> Optional[str]:
+    """The data URI of ``step``'s still, from ``stills`` or its ``poster``.
+
+    A local poster (a path, relative ones read under ``base_dir``, or a ``file://`` url) is
+    inlined; a ``data:`` uri is used as is; a remote (``http(s)``) poster is linked, so that
+    figure needs the network.
+    """
     if step.id in stills:
         return _data_uri(stills[step.id])
     poster: Optional[AssetRef] = step.poster
     if poster is None:
         return None
-    if poster.uri.startswith(("data:", "http://", "https://")):
-        return poster.uri
-    return _data_uri(poster.uri, poster.mime)
+    uri = poster.uri
+    if uri.startswith(("data:", "http://", "https://")):
+        return uri
+    if uri.startswith("file://"):
+        from urllib.parse import urlparse
+        from urllib.request import url2pathname
+
+        uri = url2pathname(urlparse(uri).path)
+    return _data_uri(Path(base_dir) / uri, poster.mime)
 
 
 def guide_html(
@@ -141,6 +164,7 @@ def guide_html(
     markdown: Markdown = simple_markdown,
     css: str = DEFAULT_GUIDE_CSS,
     number_steps: bool = True,
+    base_dir: Union[str, Path] = ".",
 ) -> str:
     """``document`` as one self-contained HTML guide (see the module docstring).
 
@@ -150,6 +174,7 @@ def guide_html(
         markdown: renders a text card's text to HTML (default :func:`simple_markdown`).
         css: the page's style sheet.
         number_steps: prefix each figure's caption with its number in the guide.
+        base_dir: where a relative ``poster`` path is read from (the document's folder).
     """
     stills = stills or {}
     esc = _html.escape
@@ -173,7 +198,7 @@ def guide_html(
                 if step.text:
                     parts.append(markdown(step.text))
                 continue
-            src = _still_of(step, stills)
+            src = _still_of(step, stills, base_dir=Path(base_dir))
             if src is None:
                 continue
             figure_no += 1
@@ -196,7 +221,7 @@ def guide_html(
             )
             alt = esc(words or f"Step {figure_no}", quote=True)
             parts.append(
-                f'<figure id="{esc(step.id, quote=True)}"><img src="{src}" alt="{alt}">'
+                f'<figure id="{esc(step.id, quote=True)}"><img src="{esc(src, quote=True)}" alt="{alt}">'
                 f"{caption}{listed}</figure>"
             )
         if parts:
@@ -244,22 +269,27 @@ class GuideRenderTarget:
         self._out.write_text(self.html(artifact), encoding="utf-8")
         return AssetRef(uri=str(self._out), mime="text/html")
 
-    def export_pdf(self, pdf_path: Union[str, Path], **pdf_options) -> Path:
-        """Print the written guide (call :meth:`export` first) to PDF with pdfdol's headless
+    async def export_pdf(self, pdf_path: Union[str, Path], **pdf_options) -> Path:
+        """Print the written guide (await :meth:`export` first) to PDF with pdfdol's headless
         Chromium, with print CSS (``media="print"``) unless ``pdf_options`` says otherwise.
 
-        Needs ``pdfdol`` (``pip install pdfdol``) and a Playwright Chromium.
+        pdfdol drives Playwright's sync API, which refuses to run inside an event loop, so it
+        runs in a worker thread. Needs pdfdol and a Playwright Chromium.
         """
+        import asyncio
+
         try:
-            from pdfdol import html_to_pdf_w_chromium
+            from pdfdol.chromium import html_to_pdf_w_chromium
         except ImportError as e:
             raise ImportError(
-                "export_pdf needs pdfdol: pip install pdfdol (and `playwright install chromium`)"
+                f"export_pdf needs pdfdol's Chromium printer (pdfdol.chromium): {e}"
             ) from e
         if not self._out.is_file():
             raise FileNotFoundError(
                 f"no guide at {self._out}: await export(document) first"
             )
         pdf_options.setdefault("media", "print")
-        html_to_pdf_w_chromium(str(self._out), str(pdf_path), **pdf_options)
+        await asyncio.to_thread(
+            html_to_pdf_w_chromium, str(self._out), str(pdf_path), **pdf_options
+        )
         return Path(pdf_path)
