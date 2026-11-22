@@ -27,6 +27,7 @@ from walkthru.adapters.playwright.cues import (
 from walkthru.adapters.playwright.film import (
     COMMAND_GESTURE,
     Filmed,
+    FilmStopped,
     LiveCues,
     arrival_ring,
     film_document,
@@ -72,6 +73,7 @@ from walkthru.adapters.playwright.recorder import (
 __all__ = [
     "COMMAND_GESTURE",
     "Filmed",
+    "FilmStopped",
     "LiveCues",
     "arrival_ring",
     "film_document",
