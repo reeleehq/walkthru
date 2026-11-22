@@ -135,7 +135,9 @@ class Hand:
         )
 
     async def _scroll_to_y(self, y_js: str) -> None:
-        await self.page.evaluate(f"window.scrollTo({{top: {y_js}, behavior: 'smooth'}})")
+        await self.page.evaluate(
+            f"window.scrollTo({{top: {y_js}, behavior: 'smooth'}})"
+        )
         await self._settle()
 
     async def scroll_top(self) -> None:
