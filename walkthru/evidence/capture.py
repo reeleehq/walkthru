@@ -15,7 +15,7 @@ from __future__ import annotations
 import json
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Optional, Union
+from typing import Any, Callable, Optional, Union
 from urllib.parse import urlparse
 
 __all__ = [
@@ -23,6 +23,7 @@ __all__ = [
     "EvidenceDependencyError",
     "capture_passage",
     "is_pdf_source",
+    "sniff_pdf_url",
     "missing_extra",
 ]
 
@@ -123,8 +124,39 @@ class Capture:
         return cls.from_dict(json.loads(p.read_text()))
 
 
-def is_pdf_source(source: PathLike) -> bool:
+#: Seconds a content sniff may take before the source is treated as not-a-PDF.
+DEFAULT_SNIFF_TIMEOUT_S = 5.0
+
+
+def sniff_pdf_url(url: str, *, timeout: float = DEFAULT_SNIFF_TIMEOUT_S) -> bool:
+    """True when ``url`` serves a PDF: ``Content-Type: application/pdf`` or a ``%PDF-`` prefix.
+
+    One small ranged GET (the first bytes only). Any network error or timeout is ``False``, so a
+    flaky sniff falls back to the browser route rather than failing the capture.
+    """
+    import urllib.request
+
+    request = urllib.request.Request(url, headers={"Range": "bytes=0-4"})
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            ctype = response.headers.get("Content-Type", "").split(";")[0].strip().lower()
+            if ctype == "application/pdf":
+                return True
+            return response.read(5) == b"%PDF-"
+    except Exception:
+        return False
+
+
+def is_pdf_source(
+    source: PathLike,
+    *,
+    sniff: Union[bool, Callable[[str], bool]] = False,
+) -> bool:
     """True when ``source`` names a PDF: a ``.pdf`` path/URL, or a local file starting ``%PDF``.
+
+    An http(s) URL whose path has no file extension (``/pdf/<id>`` style endpoints) is only
+    resolved by asking the server: pass ``sniff=True`` (:func:`sniff_pdf_url`) or a
+    ``url -> bool`` callable. Off by default, so this stays a pure, offline check.
 
     >>> is_pdf_source("https://example.org/paper.pdf?download=1")
     True
@@ -134,7 +166,11 @@ def is_pdf_source(source: PathLike) -> bool:
     s = str(source)
     parsed = urlparse(s)
     if parsed.scheme in ("http", "https", "file"):
-        return parsed.path.lower().endswith(".pdf")
+        if parsed.path.lower().endswith(".pdf"):
+            return True
+        if sniff and parsed.scheme != "file" and not Path(parsed.path).suffix:
+            return (sniff_pdf_url if sniff is True else sniff)(s)
+        return False
     p = Path(s)
     if p.suffix.lower() == ".pdf":
         return True
@@ -151,6 +187,8 @@ def capture_passage(
     *,
     out: PathLike,
     nth: Optional[int] = None,
+    kind: Optional[str] = None,
+    sniff: Union[bool, Callable[[str], bool]] = True,
     **options: Any,
 ) -> Capture:
     """Capture ``source`` (web page or PDF) at ``quote``; returns a verified :class:`Capture`.
@@ -164,6 +202,11 @@ def capture_passage(
             sidecar is written beside it.
         nth: Use exactly this occurrence of ``quote`` (0-based). By default each occurrence is
             tried in turn until one verifies.
+        kind: ``"pdf"`` or ``"html"`` to say what ``source`` is; ``None`` (default) decides from
+            the source: see :func:`is_pdf_source`.
+        sniff: for an http(s) URL with no file extension, ask the server (a ranged GET) whether it
+            serves a PDF, so ``/pdf/<id>`` endpoints route to the PDF capturer. ``False`` skips the
+            request; a ``url -> bool`` callable replaces it. Ignored when ``kind`` is given.
         **options: Passed to :func:`~walkthru.evidence.html.capture_html` or
             :func:`~walkthru.evidence.pdf.capture_pdf` — e.g. ``page=`` to reuse one browser
             page across many captures, ``dismiss_labels=``, ``ocr=``.
@@ -171,7 +214,9 @@ def capture_passage(
     Rule for callers: highlight only ``capture.rects`` of a capture whose ``found`` is true.
     Otherwise show the page without a highlight, and say so.
     """
-    if is_pdf_source(source):
+    if kind not in (None, "pdf", "html"):
+        raise ValueError(f"kind must be 'pdf', 'html' or None, got {kind!r}")
+    if kind == "pdf" or (kind is None and is_pdf_source(source, sniff=sniff)):
         from walkthru.evidence.pdf import capture_pdf
 
         return capture_pdf(source, quote, out=out, nth=nth, **options)

@@ -25,6 +25,7 @@ from walkthru.evidence.capture import (
     EvidenceDependencyError,
     capture_passage,
     is_pdf_source,
+    sniff_pdf_url,
 )
 from walkthru.evidence.clip import (
     iter_highlight_frames,
@@ -77,6 +78,7 @@ __all__ = [
     "ocracy_words",
     "page_image_coverage",
     "is_pdf_source",
+    "sniff_pdf_url",
     "normalize_text",
     "skeleton",
     "merge_line_boxes",
