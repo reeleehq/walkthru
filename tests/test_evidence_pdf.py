@@ -237,3 +237,56 @@ def test_scanned_page_real_ocr_lands_on_the_glyphs(tmp_path):
         rects=tuple(tuple(r) for r in cap.details["text_layer_rects"]),
     )  # fmt: skip
     assert _ink_fraction(layer) < 0.02
+
+
+def _write_scan_without_quote_in_layer(path: Path) -> Path:
+    """A scan whose invisible text layer is garbage, so the quote is not in the text at all."""
+    src = pymupdf.open(str(_write_born_digital(path.with_suffix(".src.pdf"), pages=1)))
+    png = src[0].get_pixmap(matrix=pymupdf.Matrix(2, 2)).tobytes("png")
+    doc = pymupdf.open()
+    page = doc.new_page(width=612, height=792)
+    page.insert_image(page.rect, stream=png)
+    page.insert_text((72, 200), "qzx vwb nnm kkl", fontsize=16, render_mode=3)
+    doc.save(str(path))
+    return path
+
+
+def test_ocr_search_finds_a_quote_missing_from_the_text_layer(tmp_path):
+    pdf = _write_scan_without_quote_in_layer(tmp_path / "garbled.pdf")
+    calls = []
+
+    def fake_ocr(png):  # full-page pixels at zoom 3
+        calls.append(png.name)
+        return [
+            ("recognition", (216, 600, 400, 640)),
+            ("rate", (410, 600, 470, 640)),
+            ("rose", (480, 600, 540, 640)),
+            ("sharply", (550, 600, 650, 640)),
+        ]
+
+    off = capture_passage(pdf, QUOTE, out=tmp_path / "a", ocr=fake_ocr)
+    assert not off.found and off.reason == "not-in-text" and calls == []
+
+    cache: dict = {}
+    cap = capture_passage(pdf, QUOTE, out=tmp_path / "b", ocr=fake_ocr, ocr_search=True, ocr_cache=cache)
+    assert cap.found and cap.verified_by == "ocr" and cap.page == 0
+    assert cap.details["found_by"] == "ocr-search" and cap.matched == QUOTE
+    W, H = cap.size
+    assert all(0 <= x0 < x1 <= W and 0 <= y0 < y1 <= H for x0, y0, x1, y1 in cap.rects)
+    assert len(calls) == 1 and len(cache) == 1
+
+    again = capture_passage(pdf, QUOTE, out=tmp_path / "c", ocr=fake_ocr, ocr_search=True, ocr_cache=cache)
+    assert again.found and len(calls) == 1, "the page's OCR words come from the cache"
+
+    capped = capture_passage(pdf, QUOTE, out=tmp_path / "d", ocr=fake_ocr, ocr_search=True, max_ocr_pages=0)
+    assert not capped.found and capped.details["ocr_page_limit"] == 0
+
+
+def test_ocr_search_skips_born_digital_pages(tmp_path):
+    pdf = _write_born_digital(tmp_path / "paper.pdf")
+    seen = []
+    cap = capture_passage(
+        pdf, "a sentence this paper never says", out=tmp_path / "a",
+        ocr=lambda png: seen.append(png) or [], ocr_search=True,
+    )
+    assert not cap.found and cap.reason == "not-in-text" and seen == []
