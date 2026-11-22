@@ -61,6 +61,10 @@ AssetResolver = Callable[[Optional[AssetRef]], Optional[Path]]
 FilmRenderer = Callable[..., Path]
 #: Assembles per-panel ``(audio, duration_s)`` into one film-long audio track (or ``None``).
 AudioAssembler = Callable[..., Optional[Path]]
+#: Composes a step's poster onto the film's frame: ``(image_or_None, step) -> image_or_None``.
+#: ``None`` in means the step has no poster (a title card may be drawn); ``None`` out means no
+#: image. See :func:`walkthru.ecosystem.reelee.composer.letterbox_poster`.
+PosterComposer = Callable[[Optional[Path], ResolvedStep], Optional[Path]]
 #: Builds the ``burns.BurnsPath`` one panel's camera follows (see :func:`index_path_builder`).
 PathBuilder = Callable[["PanelPlan"], object]
 
@@ -250,7 +254,11 @@ def _panel_view(
     narration: list[ResolvedNarration],
     camera: list[ResolvedCamera],
     poster_resolver: AssetResolver,
+    poster_composer: Optional[PosterComposer] = None,
 ) -> PanelView:
+    image_path = poster_resolver(step.step.poster)
+    if poster_composer is not None:
+        image_path = poster_composer(image_path, step)
     return PanelView(
         index=index,
         panel_id=step.step_id,
@@ -260,7 +268,7 @@ def _panel_view(
         camera=_camera_hint(camera),
         transition_in="",
         notes=_notes(step),
-        image_path=poster_resolver(step.step.poster),
+        image_path=image_path,
     )
 
 
@@ -268,6 +276,7 @@ def timeline_to_panels(
     timeline: Timeline,
     *,
     poster_resolver: AssetResolver = default_asset_resolver,
+    poster_composer: Optional[PosterComposer] = None,
 ) -> list[PanelView]:
     """Project a resolved :class:`~walkthru.core.timeline.Timeline` into ordered ``PanelView``\\ s.
 
@@ -285,6 +294,7 @@ def timeline_to_panels(
             narration=narration.get(step.step_id, []),
             camera=camera.get(step.step_id, []),
             poster_resolver=poster_resolver,
+            poster_composer=poster_composer,
         )
         for index, step in enumerate(timeline.steps, start=1)
     ]
@@ -307,6 +317,7 @@ def timeline_to_plans(
     poster_resolver: AssetResolver = default_asset_resolver,
     audio_resolver: AssetResolver = default_asset_resolver,
     min_duration_s: float = DEFAULT_MIN_DURATION_S,
+    poster_composer: Optional[PosterComposer] = None,
 ) -> list[PanelPlan]:
     """Project the timeline into renderable :class:`PanelPlan`\\ s (panel + screen time + audio).
 
@@ -314,6 +325,10 @@ def timeline_to_plans(
     ``holdAfterMs`` — in seconds, floored at ``min_duration_s`` so no panel flashes by. Audio is
     the step's first resolvable narration ``audioRef``. Both come straight from the walkthru SSOT;
     reelee's shot-timing strategies are deliberately *not* used (walkthru already owns timing).
+
+    ``poster_composer`` (default ``None``: posters go to the film as they are) maps each step's
+    resolved poster onto the film's frame — see
+    :func:`walkthru.ecosystem.reelee.composer.letterbox_poster`.
     """
     narration = _narration_by_step(timeline)
     camera = _camera_by_step(timeline)
@@ -329,6 +344,7 @@ def timeline_to_plans(
                     narration=segs,
                     camera=camera.get(step.step_id, []),
                     poster_resolver=poster_resolver,
+                    poster_composer=poster_composer,
                 ),
                 duration_s=max(min_duration_s, occupancy_s),
                 audio_path=_panel_audio(segs, audio_resolver),
@@ -504,6 +520,7 @@ def render_demo_video(
     audio_assembler: Optional[AudioAssembler] = None,
     path_builder: Optional[PathBuilder] = None,
     audio_out: Optional[Union[str, Path]] = None,
+    poster_composer: Optional[PosterComposer] = None,
 ) -> Path:
     """Compose ``document`` onto absolute time and render it as a Ken Burns mp4 at ``out``.
 
@@ -516,6 +533,7 @@ def render_demo_video(
         poster_resolver=poster_resolver,
         audio_resolver=audio_resolver,
         min_duration_s=min_duration_s,
+        poster_composer=poster_composer,
     )
     return render_plans(
         plans,
@@ -547,6 +565,7 @@ class ReeleeRenderTarget:
         poster_resolver, audio_resolver: map an :class:`AssetRef` to a local file.
         film_renderer, audio_assembler: injected render seams (default reelee/mixing).
         path_builder: the camera strategy (see :func:`render_plans`).
+        poster_composer: composes each poster onto the film frame (see :func:`timeline_to_plans`).
     """
 
     def __init__(
@@ -564,7 +583,9 @@ class ReeleeRenderTarget:
         film_renderer: Optional[FilmRenderer] = None,
         audio_assembler: Optional[AudioAssembler] = None,
         path_builder: Optional[PathBuilder] = None,
+        poster_composer: Optional[PosterComposer] = None,
     ):
+        self._poster_composer = poster_composer
         self._out_dir = Path(out_dir)
         self._path_builder = path_builder
         self._fps = fps
@@ -594,5 +615,6 @@ class ReeleeRenderTarget:
             film_renderer=self._film_renderer,
             audio_assembler=self._audio_assembler,
             path_builder=self._path_builder,
+            poster_composer=self._poster_composer,
         )
         return AssetRef(uri=str(out_path), mime="video/mp4")

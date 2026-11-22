@@ -13,6 +13,7 @@ Importing this module imports ``reelee``; like everything in :mod:`walkthru.ecos
 the core imports it, so the firewall holds and ``reelee`` stays an optional extra.
 """
 
+from walkthru.ecosystem.reelee.composer import letterbox_poster
 from walkthru.ecosystem.reelee.production import FootageTrack, to_production_manifest
 from walkthru.ecosystem.reelee.render_target import (
     AssetResolver,
@@ -22,6 +23,7 @@ from walkthru.ecosystem.reelee.render_target import (
     Framing,
     PanelPlan,
     PathBuilder,
+    PosterComposer,
     ReeleeRenderTarget,
     camera_move,
     camera_path_builder,
@@ -42,7 +44,9 @@ __all__ = [
     "Framing",
     "PanelPlan",
     "PathBuilder",
+    "PosterComposer",
     "ReeleeRenderTarget",
+    "letterbox_poster",
     "camera_move",
     "camera_path_builder",
     "default_asset_resolver",

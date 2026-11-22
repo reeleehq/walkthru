@@ -37,6 +37,9 @@ class ResolvedStep:
     end_ms: int
     hold_after_ms: int
     step: Step
+    #: The title of the section holding the step (``None`` when the section has none) — what a
+    #: renderer shows as a chapter strip.
+    section_title: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -106,6 +109,7 @@ def iter_resolved_steps(document: DemoDocument) -> Iterator[ResolvedStep]:
                 end_ms=end,
                 hold_after_ms=hold,
                 step=step,
+                section_title=section.title,
             )
             cursor = end + hold
 
