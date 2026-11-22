@@ -20,7 +20,7 @@ from __future__ import annotations
 import urllib.request
 import warnings
 from pathlib import Path
-from typing import Any, Callable, Optional, Sequence, Union
+from typing import Any, Callable, MutableMapping, Optional, Sequence, Union
 from urllib.parse import urlparse
 
 from walkthru.evidence.capture import Capture, missing_extra
@@ -204,6 +204,62 @@ def _line_ends(words: Sequence[tuple]) -> list[bool]:
     return [i == len(keys) - 1 or keys[i] != keys[i + 1] for i in range(len(keys))]
 
 
+def _ocr_search(
+    doc: Any,
+    quote: str,
+    pages: Sequence[int],
+    *,
+    ocr: OcrWords,
+    zoom: float,
+    scan_coverage: float,
+    min_ratio: float,
+    max_pages: int,
+    cache: Optional[MutableMapping],
+) -> tuple[Optional[tuple[int, list[Box]]], dict]:
+    """Find ``quote`` by OCR on scanned ``pages`` whose text layer does not hold it.
+
+    Only scans (image coverage >= ``scan_coverage``, or invisible text) are read, at most
+    ``max_pages`` of them, in order. A page's OCR words are cached by the hash of its rendered
+    image in ``cache`` (any mapping) when one is given. Returns ``((page, boxes_in_page_points),
+    details)``, the first element ``None`` when no page matched; ``details`` records what was tried.
+    """
+    import hashlib
+    import tempfile
+
+    fitz = _fitz()
+    details: dict[str, Any] = {"ocr_pages_tried": []}
+    with tempfile.TemporaryDirectory(prefix="walkthru_ocr_") as tmp:
+        for pno in pages:
+            pg = doc[pno]
+            if not (page_image_coverage(pg) >= scan_coverage or has_invisible_text(pg)):
+                continue
+            if len(details["ocr_pages_tried"]) >= max_pages:
+                details["ocr_page_limit"] = max_pages
+                break
+            details["ocr_pages_tried"].append(pno)
+            png = Path(tmp) / f"page{pno}.png"
+            pg.get_pixmap(matrix=fitz.Matrix(zoom, zoom), alpha=False).save(str(png))
+            key = hashlib.sha1(png.read_bytes()).hexdigest()
+            if cache is not None and key in cache:
+                words = cache[key]
+            else:
+                words = [(w, tuple(b)) for w, b in ocr(png)]
+                if cache is not None:
+                    cache[key] = words
+            run = fuzzy_word_run([w for w, _ in words], quote)
+            if run is None:
+                continue
+            i, j, score = run
+            text = " ".join(w for w, _ in words[i : j + 1])
+            if score < min_ratio or not tokens_agree(text, quote):
+                details["ocr_score"] = max(details.get("ocr_score", 0.0), round(score, 1))
+                continue
+            boxes = merge_line_boxes(b for _, b in words[i : j + 1])
+            details.update(ocr_score=round(score, 1), ocr_text=text)
+            return (pno, [tuple(c / zoom for c in b) for b in boxes]), details
+    return None, details
+
+
 def capture_pdf(
     source: Union[str, Path],
     quote: Optional[str] = None,
@@ -217,6 +273,9 @@ def capture_pdf(
     ocr: Optional[OcrWords] = ocracy_words,
     scan_coverage: float = 0.9,
     ocr_min_ratio: float = 85.0,
+    ocr_search: bool = False,
+    max_ocr_pages: int = 5,
+    ocr_cache: Optional[MutableMapping] = None,
     timeout: float = 60.0,
 ) -> Capture:
     """Render the PDF page holding ``quote`` as a 16:9 window around it, with verified boxes.
@@ -236,6 +295,13 @@ def capture_pdf(
             page holding invisible text (an OCR layer).
         ocr_min_ratio: Minimum fuzzy score (0..100) for OCR words to count as the quote; the
             words must also agree one by one (:func:`~walkthru.evidence.text.tokens_agree`).
+        ocr_search: When no page's text layer holds the quote, OCR the scanned pages (``page``
+            only, when given) and look for it there: for scans whose embedded text is missing or
+            too garbled. Opt-in, since it costs one OCR pass per page; ``max_ocr_pages`` bounds
+            it, and ``ocr_cache`` (any mapping) keeps each page's words, keyed by the page
+            image's hash, so a rerun reads nothing twice.
+        max_ocr_pages: At most this many scanned pages are OCR-searched.
+        ocr_cache: Optional ``MutableMapping`` caching OCR words per page image.
         timeout: Seconds allowed to download an ``http(s)`` PDF.
     """
     fitz = _fitz()
@@ -259,6 +325,28 @@ def capture_pdf(
                     remaining, k = remaining - 1, k + 1
                 if run is not None:
                     break
+        ocr_hit: Optional[tuple[int, list[Box]]] = None
+        search_details: dict[str, Any] = {}
+        if wanted and run is None and ocr_search and ocr is not None:
+            try:
+                ocr_hit, search_details = _ocr_search(
+                    doc,
+                    quote,
+                    [page] if page is not None else list(range(len(doc))),
+                    ocr=ocr,
+                    zoom=zoom,
+                    scan_coverage=scan_coverage,
+                    min_ratio=ocr_min_ratio,
+                    max_pages=max_ocr_pages,
+                    cache=ocr_cache,
+                )
+            except ImportError as e:  # the ocr extra is not installed
+                warnings.warn(f"{e}: not searching scanned pages by OCR.")
+            except Exception as e:  # e.g. the OCR engine's binary is missing
+                warnings.warn(f"OCR search failed ({e}).")
+                search_details = {"ocr_error": str(e)}
+            if ocr_hit is not None:
+                hit_page = ocr_hit[0]
         pg = doc[hit_page]
         hit_words = words[run[0] : run[1] + 1] if run else []
         rot = pg.rotation_matrix  # word boxes are unrotated; the rendered page is not
@@ -268,6 +356,8 @@ def capture_pdf(
             key = (w[5], w[6])
             lines[key] = lines[key] | r if key in lines else r
         line_boxes = [(r.x0, r.y0, r.x1, r.y1) for r in lines.values()]
+        if ocr_hit is not None:
+            line_boxes = ocr_hit[1]
         win = _window(
             pg.rect, line_boxes, aspect=aspect, min_height_frac=min_height_frac
         )
@@ -281,6 +371,15 @@ def capture_pdf(
         details: dict[str, Any] = {}
         verified_by, reason = None, ("not-in-text" if wanted else "no-quote")
         matched = " ".join(w[4] for w in hit_words) if run else None
+        details.update(search_details)
+        if ocr_hit is not None:
+            rects = tuple(to_image(b) for b in line_boxes)
+            verified_by, reason = "ocr", None
+            matched = search_details.get("ocr_text")
+            details.update(
+                image_coverage=round(page_image_coverage(pg), 3),
+                found_by="ocr-search",
+            )
         if run is not None:
             coverage = page_image_coverage(pg)
             invisible = has_invisible_text(pg)
