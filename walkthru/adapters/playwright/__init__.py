@@ -16,6 +16,7 @@ from walkthru.adapters.playwright.cursor import (
     cursor_script,
     install_synthetic_cursor,
 )
+from walkthru.adapters.playwright.gestures import GESTURES, Hand
 from walkthru.adapters.playwright.player import (
     PAGE_COMMANDS,
     PlaywrightCommandPlayer,
@@ -44,6 +45,8 @@ from walkthru.adapters.playwright.recorder import (
 )
 
 __all__ = [
+    "GESTURES",
+    "Hand",
     "DEFAULT_CURSOR_SIZE",
     "cursor_script",
     "install_synthetic_cursor",
