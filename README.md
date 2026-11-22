@@ -137,6 +137,18 @@ guide.export_pdf("guide.pdf")  # optional: printed by pdfdol's headless Chromium
 
 `read_only=True` aborts the page's non-GET requests while shooting, so a guide can be shot against a live account. A text-card beat becomes prose, a section a chapter.
 
+## Film a tour
+
+`film_document` plays a document in real time while recording the screen: each step runs its gestures (a pointer that glides, hovers, clicks and scrolls visibly) or its command, its cues are drawn once its effect is on screen and stay up for its hold, and the pointer rings each target it reaches. It returns the recording and each step's in-point; `mux_narration` lays the assembled narration under it.
+
+```python
+from walkthru.adapters.playwright import film_document, mux_narration
+
+filmed = await film_document(doc, page, "tour.mp4",
+                             gestures={"open-menu": [("glide", menu), ("command",)]})
+mux_narration("tour.mp4", doc, "tour-narrated.mp4", at_s=filmed.in_points["open-menu"])
+```
+
 ## Show a source on screen, its quoted passage highlighted
 
 For explainer, educational or historical videos that cite sources: capture the web page or PDF at the quoted passage, then render a short clip where the camera eases toward the passage and a highlighter sweeps across it while the narration speaks those words.

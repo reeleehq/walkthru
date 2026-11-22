@@ -82,6 +82,11 @@ _OVERLAY_SCRIPT = r"""
   const doc = document.documentElement;
   let layer = document.getElementById(p.layer);
   if (p.kind === 'clear') { if (layer) layer.remove(); return; }
+  if (p.kind === 'hide') {
+    if (layer) layer.querySelectorAll('[data-walkthru-cue-id="' + CSS.escape(p.id) + '"]')
+      .forEach((n) => n.remove());
+    return;
+  }
   if (!layer) {
     layer = document.createElement('div');
     layer.id = p.layer;
@@ -96,6 +101,7 @@ _OVERLAY_SCRIPT = r"""
   const x = p.rect.x - L.left, y = p.rect.y - L.top;
   const el = document.createElement('div');
   el.dataset.walkthruCue = p.kind;
+  if (p.id) el.dataset.walkthruCueId = p.id;
   const base = {position: 'absolute', boxSizing: 'border-box', pointerEvents: 'none'};
   if (p.kind === 'highlight') {
     const pad = p.padding;
@@ -157,7 +163,7 @@ def cue_overlay_payload(
     >>> p["kind"], p["thickness"], p["padding"], p["color"]
     ('highlight', 5, 6, '#ff5a1f')
     """
-    common = {"layer": layer, "rect": rect.model_dump()}
+    common = {"layer": layer, "rect": rect.model_dump(), "id": cue.id}
     if isinstance(cue, HighlightCue):
         return {
             **common,
@@ -257,6 +263,12 @@ class DomOverlayCueRenderer:
         )
         if payload is not None:
             await self._page.evaluate(_OVERLAY_SCRIPT, payload)
+
+    async def hide(self, cue_id: str) -> None:
+        """Remove one cue's overlay (a cue whose ``durationMs`` ran out), keeping the others."""
+        await self._page.evaluate(
+            _OVERLAY_SCRIPT, {"kind": "hide", "layer": self._layer, "id": cue_id}
+        )
 
     async def clear(self) -> None:
         """Remove every overlay, and restart callout numbering."""
